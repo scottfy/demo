@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 新聞採編 Agent (AI Newsroom Co-Pilot)</title>
+  <meta name="description" content="輔助撰寫新聞報導的 AI Agent - 包含主題風格討論 Chat View 與大標題、副標題、內文 Article View" />
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="index.css" />
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Top Navigation Header -->
+    <header class="glass-header px-6 py-3.5 flex items-center justify-between z-20" style="padding: 0.875rem 1.5rem; display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <div style="width: 2.25rem; height: 2.25rem; border-radius: 0.625rem; background: linear-gradient(135deg, #06b6d4, #3b82f6); display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 0 15px rgba(6,182,212,0.4);">
+          <i class="fa-solid fa-newspaper text-sm"></i>
+        </div>
+        <div>
+          <h1 style="font-size: 1rem; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+            AI 新聞採編 Agent
+            <span style="font-size: 0.65rem; padding: 0.15rem 0.5rem; border-radius: 1rem; background: rgba(6,182,212,0.15); color: #22d3ee; border: 1px solid rgba(6,182,212,0.3);">v2.0 Native</span>
+          </h1>
+          <p style="font-size: 0.75rem; color: #94a3b8; margin: 0;">智慧新聞報導寫作輔助引擎（Chat & Article 雙視窗動態連動）</p>
+        </div>
+      </div>
+
+      <!-- Header Action Controls -->
+      <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <!-- Tone Selector -->
+        <div style="display: flex; align-items: center; gap: 0.35rem; background: rgba(255,255,255,0.05); padding: 0.25rem 0.625rem; border-radius: 0.625rem; border: 1px solid rgba(255,255,255,0.1);">
+          <i class="fa-solid fa-sliders" style="font-size: 0.75rem; color: #06b6d4;"></i>
+          <span style="font-size: 0.75rem; color: #94a3b8; font-weight: 500;">報導風格：</span>
+          <select id="toneSelector" style="background: transparent; color: #22d3ee; border: none; font-size: 0.75rem; font-weight: 700; outline: none; cursor: pointer;">
+            <option value="客觀中立報導" style="background: #0f172a; color: #fff;">客觀中立報導</option>
+            <option value="深度調查分析" style="background: #0f172a; color: #fff;">深度調查分析</option>
+            <option value="科技快訊重點" style="background: #0f172a; color: #fff;">科技快訊重點</option>
+            <option value="財經趨勢剖析" style="background: #0f172a; color: #fff;">財經趨勢剖析</option>
+            <option value="社群懶人包風格" style="background: #0f172a; color: #fff;">社群懶人包風格</option>
+          </select>
+        </div>
+
+        <!-- API Key Modal Trigger Button -->
+        <button id="apiKeyBtn" class="btn btn-secondary btn-sm">
+          <i class="fa-solid fa-key" style="color: #fbbf24;"></i>
+          <span id="apiKeyStatusText">設定 API Key</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Dual-Pane Layout -->
+    <main class="main-layout">
+      
+      <!-- Left Column: AI Chat View -->
+      <section class="glass-panel chat-container">
+        <!-- Chat Header -->
+        <div style="padding: 0.875rem 1.25rem; border-bottom: 1px solid var(--border-light); background: rgba(255,255,255,0.02); display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 0.625rem;">
+            <div style="width: 1.75rem; height: 1.75rem; border-radius: 0.5rem; background: rgba(6,182,212,0.15); border: 1px solid rgba(6,182,212,0.3); display: flex; align-items: center; justify-content: center; color: #22d3ee;">
+              <i class="fa-solid fa-robot text-xs"></i>
+            </div>
+            <div>
+              <h2 style="font-size: 0.875rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.35rem;">
+                AI 討論視窗 (Chat View)
+                <span style="width: 6px; height: 6px; border-radius: 50%; background: #34d399;"></span>
+              </h2>
+              <p style="font-size: 0.6875rem; color: #94a3b8; margin: 0;">與 AI 討論新聞主題、訪談素材與文章風格</p>
+            </div>
+          </div>
+          <button id="clearChatBtn" class="btn btn-secondary btn-sm" title="清空對話紀錄">
+            <i class="fa-solid fa-rotate-left"></i>
+          </button>
+        </div>
+
+        <!-- Chat Messages List -->
+        <div id="chatMessages" class="chat-messages">
+          <!-- Dynamically populated by app.js -->
+        </div>
+
+        <!-- Quick Prompts Toolbar -->
+        <div class="quick-prompts">
+          <button class="prompt-chip" data-prompt="💡 請幫我發想 3 個吸睛的爆款新聞大標與副標題">💡 發想爆款標題</button>
+          <button class="prompt-chip" data-prompt="📝 請根據目前主題整理 5W1H 新聞報導大綱">📝 5W1H 新聞大綱</button>
+          <button class="prompt-chip" data-prompt="🔍 補充此事件相關數據與背景脈絡說明">🔍 補充背景與數據</button>
+          <button class="prompt-chip" data-prompt="🚀 請生成一篇完整的新聞報導並帶入右側文章視窗">🚀 生成完整報導草稿</button>
+        </div>
+
+        <!-- Chat Input Form -->
+        <form id="chatForm" class="chat-input-area">
+          <input type="text" id="chatInput" class="chat-input" placeholder="輸入新聞主題、採訪重點或文章風格指令..." autocomplete="off" />
+          <button type="submit" id="sendBtn" class="btn btn-primary">
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+        </form>
+      </section>
+
+      <!-- Right Column: Article View -->
+      <section class="glass-panel article-container">
+        <!-- Article Header Bar -->
+        <div class="article-header-bar">
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <span class="badge badge-cyan">
+              <i class="fa-solid fa-tag"></i> 新聞草稿
+            </span>
+            <div style="display: flex; align-items: center; gap: 0.875rem; font-size: 0.75rem; color: #94a3b8;">
+              <span id="wordCountDisplay"><i class="fa-solid fa-font" style="color: #64748b;"></i> 0 字</span>
+              <span id="readTimeDisplay"><i class="fa-solid fa-clock" style="color: #64748b;"></i> 約 1 分鐘閱讀</span>
+            </div>
+          </div>
+
+          <!-- Export & Action Buttons -->
+          <div style="display: flex; align-items: center; gap: 0.5rem;">
+            <button id="copyArticleBtn" class="btn btn-secondary btn-sm" title="複製文章全文">
+              <i class="fa-regular fa-copy"></i> 複製全文
+            </button>
+            <button id="exportMdBtn" class="btn btn-accent btn-sm" title="匯出 Markdown 檔案">
+              <i class="fa-solid fa-file-arrow-down"></i> 匯出 MD
+            </button>
+            <button id="resetArticleBtn" class="btn btn-secondary btn-sm" title="重置為範例報導">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Article Content Editable Container -->
+        <div class="article-content-body">
+          <!-- Main Title (大標題) -->
+          <h1 id="articleMainTitle" class="editable-title" contenteditable="true" spellcheck="false">
+            突破性 Quantum-AI 晶片問世：運算效能提升 100 倍，掀起下一世代新聞採編革命
+          </h1>
+
+          <!-- Subtitle (副標題) -->
+          <h2 id="articleSubTitle" class="editable-subtitle" contenteditable="true" spellcheck="false">
+            全球科研團隊發表最新光子邏輯架構，將重塑數位媒體生產流程與深度報導分析速度。
+          </h2>
+
+          <hr style="border: none; border-top: 1px solid var(--border-light); margin: 0.5rem 0;" />
+
+          <!-- Body Content (內文) -->
+          <div id="articleBody" class="editable-body" contenteditable="true" spellcheck="false">
+            <p>在人工智慧發展史上的重要里程碑中，全球頂尖聯合實驗室今日正式發表全新「Quantum-AI」晶片。該架構採用突破性的光子邏輯傳輸機制，能將大規模語言模型 (LLM) 的運算推論延遲降低至原本的百分之一，同時降低 85% 的能源消耗。</p>
+            
+            <h3>打破算力瓶頸：新聞與數位內容產業首當其衝</h3>
+            <p>這項突破不僅意味著超級電腦與資料中心效能的極限擴充，更將重塑內容創作與現代新聞採編模式。新聞編輯室現在能透過即時多模態分析，在秒級時間內梳理數萬筆現場數據、影音資料與國際通訊社電報，為記者提供極具洞察力的背景整理與事實查核提示。</p>
+            
+            <blockquote>「我們不再只是對語言進行機率預測，而是讓晶片在硬體層級模擬類神經邏輯流動，這將徹底改寫人機協作寫作的邊界。」—— 首席架構師受訪表示。</blockquote>
+            
+            <p>展望未來，科技界普遍預測該晶片將於 2027 年正式進入數據中心量產階段。屆時，智慧輔助工具將不再只是文字處理器，而是能深層輔助事實查核、觀點多角度剖析與國際情勢交叉比對的數位智囊。</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+  </div>
+
+  <!-- Gemini API Key Setting Modal -->
+  <div id="apiKeyModal" class="modal-overlay">
+    <div class="modal-box">
+      <div style="display: flex; items-center justify-between; margin-bottom: 1rem;">
+        <h3 style="font-size: 1.125rem; font-weight: 700; color: #fff; margin: 0; display: flex; align-items: center; gap: 0.5rem;">
+          <i class="fa-solid fa-key" style="color: #fbbf24;"></i> 設定 Gemini API Key
+        </h3>
+      </div>
+      <p style="font-size: 0.8125rem; color: #94a3b8; margin-bottom: 1rem; line-height: 1.5;">
+        輸入您的 Google Gemini API Key 以開啟真實 AI 大語言模型生成能力。若未設定，系統將自動開啟<strong>內建即時模擬模式 (Mock Engine)</strong>。
+      </p>
+      <input type="password" id="modalApiKeyInput" class="chat-input" style="width: 100%; margin-bottom: 1.25rem;" placeholder="貼上 AIZA... 開頭的 Gemini API Key" />
+      
+      <div style="display: flex; align-items: center; justify-content: flex-end; gap: 0.625rem;">
+        <button id="closeModalBtn" class="btn btn-secondary">取消</button>
+        <button id="saveApiKeyBtn" class="btn btn-primary">儲存設定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Application Logic JavaScript -->
+  <script src="app.js"></script>
+</body>
+</html>

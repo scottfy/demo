@@ -1,0 +1,20 @@
+{
+  "name": "ai-news-writing-assistant",
+  "version": "2.0.0",
+  "description": "AI News Writing Assistant Web Application and Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "server:ps": "powershell -ExecutionPolicy Bypass -File ./server.ps1",
+    "server:py": "python server.py"
+  },
+  "keywords": [
+    "ai",
+    "newsroom",
+    "writer",
+    "copilot",
+    "gemini"
+  ],
+  "author": "Antigravity AI",
+  "license": "ISC"
+}
