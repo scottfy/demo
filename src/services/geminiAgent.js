@@ -96,6 +96,56 @@ export async function getAvailableModel(ai) {
 }
 
 /**
+ * Call generateContent with automatic 503/429 retry and fallback models
+ */
+async function callGenerateContentWithRetry(ai, primaryModel, contents, config, onActivityState) {
+  const candidateModels = [
+    primaryModel,
+    'gemini-3.5-flash',
+    'gemini-2.5-flash',
+    'gemini-2.5-pro'
+  ].filter((m, i, arr) => m && arr.indexOf(m) === i); // deduplicate
+
+  let lastError = null;
+
+  for (let mIdx = 0; mIdx < candidateModels.length; mIdx++) {
+    const currentModel = candidateModels[mIdx];
+    
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        if (onActivityState && (mIdx > 0 || attempt > 1)) {
+          onActivityState('running_tool', `正在連線/重試 Gemini (${currentModel})...`);
+        }
+
+        const response = await ai.models.generateContent({
+          model: currentModel,
+          contents,
+          config
+        });
+
+        if (response && response.candidates && response.candidates.length > 0) {
+          return { response, usedModel: currentModel };
+        }
+      } catch (err) {
+        lastError = err;
+        const errStr = typeof err === 'string' ? err : (err?.message || JSON.stringify(err));
+        console.warn(`Attempt ${attempt} for model ${currentModel} failed:`, errStr);
+
+        // If 503 / 429 transient error, wait 1.5s before retrying
+        if (errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand') || errStr.includes('429')) {
+          await new Promise(r => setTimeout(r, 1500));
+        } else {
+          // Non-transient error, try next candidate model
+          break;
+        }
+      }
+    }
+  }
+
+  throw lastError || new Error('所有 Gemini 模型嘗試均失敗。');
+}
+
+/**
  * DB & Search Tool Execution Handlers
  */
 async function executeDbTool(name, args) {
@@ -197,6 +247,10 @@ const dbFunctionDeclarations = [
 function formatFriendlyError(error) {
   const errStr = typeof error === 'string' ? error : (error?.message || JSON.stringify(error));
   
+  if (errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand')) {
+    return `⚠️ **Gemini API 服務暫時忙碌 (503 Service Unavailable)**\n\n目前 Google API 閘道端該模型暫時流量較大，系統已嘗試自動連線重試。\n\n**建議解法：**\n1. 請等待 5~10 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 確認權限或切換 API 閘道。`;
+  }
+
   if (errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota') || errStr.includes('limit: 0')) {
     return `⚠️ **Gemini API 用量超過限制 (429 Rate Limit Exceeded)**\n\n您的 Gemini API Key 已達到 API 請求額度上限或暫時速率限制。\n\n**建議解法：**\n1. 請等待 10~30 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 更換為具備可用額度的 Gemini API Key。`;
   }
@@ -373,14 +427,15 @@ Always respond in Traditional Chinese (繁體中文).`;
         onActivityState('running_tool', `正在呼叫 Gemini (${modelName}) 進行資料分析與工具調用 (第 ${loopCount} 輪)...`);
       }
 
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents,
-        config: {
-          systemInstruction,
-          tools: toolsConfig
-        }
-      });
+      const { response, usedModel } = await callGenerateContentWithRetry(
+        ai, 
+        modelName, 
+        contents, 
+        { systemInstruction, tools: toolsConfig },
+        onActivityState
+      );
+
+      modelName = usedModel; // Update if model candidate switched
 
       const candidate = response.candidates?.[0];
       if (!candidate) {
@@ -520,10 +575,12 @@ Return ONLY the updated complete standalone HTML document string wrapped in \`\`
 Maintain standard modern CSS styling, Chart.js code, dynamic interactive scripts, and paper-shadow card layouts.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: prompt
-    });
+    const { response } = await callGenerateContentWithRetry(
+      ai,
+      modelName,
+      prompt,
+      {}
+    );
 
     const text = response.text || '';
     const rawHtml = extractReportHtml(text) || text.trim();
