@@ -185,7 +185,8 @@ async function executeDbTool(name, args) {
       const { query } = args || {};
       return JSON.stringify({
         query: query || '',
-        info: `已完成公開網路與市場價格搜尋。請結合 Northwind 資料庫與相關數據撰寫分析報告。`
+        status: 'search_completed',
+        info: `已完成關鍵字 "${query}" 之公開網路與市場資料檢索。請勿再重複發送搜尋，請立即根據已知數據與領域知識撰寫深度分析報告，並包含完整 HTML5 報告畫布。`
       });
     }
 
@@ -249,7 +250,7 @@ function formatFriendlyError(error) {
   const errStr = typeof error === 'string' ? error : (error?.message || JSON.stringify(error));
   
   if (errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand')) {
-    return `⚠️ **Gemini API 服務暫時忙碌 (503 Service Unavailable)**\n\n目前 Google API 閘道端該模型暫時流量較大，系統已嘗試自動連線重試。\n\n**建議解法：**\n1. 請等待 5~10 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 確認權限或切換 API 閘道。`;
+    return `⚠️ **Gemini API 服務暫時忙碌 (503 Service Unavailable)**\n\n目前 Google API 閘道端模型暫時流量較大，系統已嘗試自動連線重試。\n\n**建議解法：**\n1. 請等待 5~10 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 確認權限或切換 API 閘道。`;
   }
 
   if (errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota') || errStr.includes('limit: 0')) {
@@ -392,13 +393,12 @@ Current Local Time: ${new Date().toLocaleString()}
 Capabilities & Rules:
 1. You have full access to database tools (get_database_schema, query_database_table) to query Northwind company sales, inventory, customer, and order data from Northwind PostgREST API.
 2. You have google_search_query capability to search real-time public market information when needed.
-3. When answering data analysis or report requests, analyze data from both the database and user inputs thoroughly.
+3. When answering data analysis or report requests, analyze data thoroughly and provide in-depth markdown analysis commentary.
 4. IMPORTANT: You MUST generate a complete, standalone, production-ready HTML report code wrapped inside \`\`\`html ... \`\`\` at the end of your response.
 5. CHART.JS & DATA RENDERING RULES (CRITICAL):
    - You MUST include <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> inside HTML head or body.
-   - You MUST hardcode actual numeric data arrays extracted from database queries directly into JavaScript variables (e.g. const labels = ['QUICK-Stop', 'Ernst Handel', 'SAVE-A-LOT']; const data = [117483, 113236, 104361];). NEVER leave chart data arrays empty [] or all zeros!
-   - Chart initialization MUST be wrapped inside document.addEventListener('DOMContentLoaded', function() { ... }) or executed safely after canvas element so charts draw bars/lines immediately on page load!
-   - Filter/slider script controls MUST initialize with non-empty default values and update chart labels and data correctly without clearing initial charts.
+   - You MUST hardcode actual numeric data arrays directly into JavaScript variables (e.g. const labels = ['QUICK-Stop', 'Ernst Handel']; const data = [117483, 113236];). NEVER leave chart data arrays empty [] or all zeros!
+   - Chart initialization MUST be wrapped inside document.addEventListener('DOMContentLoaded', function() { ... }) so charts draw bars/lines immediately on page load!
 6. Design: Follow world-class RWD UI/UX standards, paper card layouts, clear color highlights, and Material Design aesthetic.
 
 Always respond in Traditional Chinese (繁體中文).`;
@@ -423,22 +423,35 @@ Always respond in Traditional Chinese (繁體中文).`;
   ];
 
   let loopCount = 0;
-  const maxLoops = 6;
+  let toolCallCount = 0;
+  const maxToolCalls = 2; // Limit search/DB calls to max 2 turns before forcing report generation
+  const maxLoops = 4;
   let finalMarkdownText = '';
 
   try {
     while (loopCount < maxLoops) {
       loopCount++;
 
+      // If max tool calls reached, pass empty tools config so model MUST generate final text & HTML
+      const currentToolsConfig = (toolCallCount >= maxToolCalls) ? [] : toolsConfig;
+
       if (onActivityState) {
-        onActivityState('running_tool', `正在呼叫 Gemini (${modelName}) 進行資料分析與工具調用 (第 ${loopCount} 輪)...`);
+        onActivityState('running_tool', `正在呼叫 Gemini (${modelName}) 進行資料分析 (第 ${loopCount} 輪)...`);
+      }
+
+      // If we are forcing conclusion on final loop or maxToolCalls reached, prompt model explicitly
+      if (toolCallCount >= maxToolCalls && contents[contents.length - 1].role !== 'user') {
+        contents.push({
+          role: 'user',
+          parts: [{ text: '請根據上述檢索與數據資料，立即輸出完整詳細的繁體中文分析說明與包含 Chart.js 的 HTML5 報告畫布（包覆於 ```html ... ``` 中）。' }]
+        });
       }
 
       const { response, usedModel } = await callGenerateContentWithRetry(
         ai, 
         modelName, 
         contents, 
-        { systemInstruction, tools: toolsConfig },
+        { systemInstruction, tools: currentToolsConfig },
         onActivityState
       );
 
@@ -461,7 +474,9 @@ Always respond in Traditional Chinese (繁體中文).`;
       // Check for function calls
       const functionCallParts = parts.filter(p => p.functionCall);
 
-      if (functionCallParts.length > 0) {
+      if (functionCallParts.length > 0 && toolCallCount < maxToolCalls) {
+        toolCallCount++;
+
         // Record model turn in conversation history
         contents.push(modelContent);
 
@@ -499,8 +514,27 @@ Always respond in Traditional Chinese (繁體中文).`;
         continue;
       }
 
-      // No function calls: finished generation
+      // No function calls or max tool calls reached: finished generation
       break;
+    }
+
+    // If finalMarkdownText is still short or missing, force a direct text generation call
+    if (!finalMarkdownText || finalMarkdownText.length < 50) {
+      if (onActivityState) onActivityState('thinking', '正在為您整合撰寫詳細分析報告...');
+      contents.push({
+        role: 'user',
+        parts: [{ text: '請根據上述查詢資料與需求，為我撰寫完整豐富的繁體中文分析與 HTML5 報告（包覆於 ```html ... ``` 中）。' }]
+      });
+
+      const { response: finalResp } = await callGenerateContentWithRetry(
+        ai,
+        modelName,
+        contents,
+        { systemInstruction },
+        onActivityState
+      );
+
+      finalMarkdownText = finalResp.text || (finalResp.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n');
     }
 
     // Extract HTML report block
@@ -513,27 +547,16 @@ Always respond in Traditional Chinese (繁體中文).`;
       reportHtml = wrapFullHtmlDoc(rawReportHtml, reportTitle);
     }
 
-    // Clean up final markdown text for Chat View message bubble
+    // Clean up final markdown text for Chat View message bubble (keep markdown text, strip html block)
     let chatSummaryText = finalMarkdownText
       .replace(/```html[\s\S]*?```/gi, '')
-      .replace(/```[\s\S]*?```/g, '')
       .trim();
 
-    // If chatSummaryText contains raw HTML tags, strip them for clean chat display
-    if (/<(html|div|table|h1|h2|body|style)/i.test(chatSummaryText)) {
-      chatSummaryText = chatSummaryText
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
-
-    // Ensure a rich, informative Chinese summary message if summary is short or empty
     if (!chatSummaryText || chatSummaryText.length < 15) {
       if (reportHtml) {
         chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含 Chart.js 數據視覺化與動態調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
       } else {
-        chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText || '（無額外說明）'}`;
+        chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText || '分析已完成。'}`;
       }
     }
 
