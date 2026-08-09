@@ -4,14 +4,11 @@ import {
   Maximize2, 
   Minimize2, 
   Printer, 
-  History, 
   Sparkles, 
   Edit2, 
   Eye, 
-  RefreshCw, 
   Send,
   Layers,
-  HelpCircle,
   Download
 } from 'lucide-react';
 import { modifyReportBlock } from '../services/geminiAgent';
@@ -25,7 +22,7 @@ export default function ReportEditorView({
     return (
       <div className="p-12 text-center text-slate-500 space-y-4 max-w-md mx-auto">
         <FileCode2 className="w-12 h-12 text-slate-300 mx-auto" />
-        <h3 className="text-lg font-bold text-slate-700">尚未選擇採購報告</h3>
+        <h3 className="text-lg font-bold text-slate-700">尚未選擇分析報告</h3>
         <p className="text-xs">請至 Dashboard 或 Report Manager 點選一份報告以開啟檢視與編輯。</p>
       </div>
     );
@@ -49,16 +46,17 @@ export default function ReportEditorView({
   const currentVersion = versions.find(v => v.versionId === activeVersionId) || versions[0];
   const activeHtml = currentVersion?.htmlContent || '';
 
-  // Handle printing iframe content
+  // Handle printing iframe content (PDF download)
   const handlePrint = () => {
     if (iframeRef.current && iframeRef.current.contentWindow) {
+      iframeRef.current.contentWindow.focus();
       iframeRef.current.contentWindow.print();
     } else {
       window.print();
     }
   };
 
-  // Block Edit handler
+  // Block Edit handler ("局部 AI 框選微調")
   const handleBlockEditSubmit = async (e) => {
     e.preventDefault();
     if (!editPrompt.trim()) return;
@@ -93,6 +91,7 @@ export default function ReportEditorView({
       setIsEditMode(false);
     } catch (err) {
       console.error('Block modification failed:', err);
+      alert(err.message || '局部 AI 微調失敗，請檢查 API Key 或重試。');
     } finally {
       setIsModifying(false);
     }
@@ -100,9 +99,9 @@ export default function ReportEditorView({
 
   return (
     <div className={`flex flex-col ${isFullscreen ? 'fixed inset-0 z-50 bg-slate-900' : 'h-[calc(100vh-57px)]'}`}>
-      {/* Report Editor Top Action Bar */}
-      <div className="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between z-20 flex-wrap gap-2">
-        {/* Title & Version Selector */}
+      {/* Top Action Toolbar */}
+      <div className="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between z-20 flex-wrap gap-2 shadow-sm">
+        {/* Report Title & Version History Dropdown */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -111,7 +110,7 @@ export default function ReportEditorView({
             </h2>
           </div>
 
-          {/* Version Dropdown */}
+          {/* Version Selector */}
           <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
             <Layers className="w-3.5 h-3.5 text-blue-600" />
             <select
@@ -128,7 +127,7 @@ export default function ReportEditorView({
           </div>
         </div>
 
-        {/* Action Controls */}
+        {/* Right Action Controls */}
         <div className="flex items-center gap-2">
           {/* Mode Switcher: Preview vs Edit */}
           <div className="bg-slate-100 p-1 rounded-xl border border-slate-200 flex items-center gap-1">
@@ -154,7 +153,7 @@ export default function ReportEditorView({
             </button>
           </div>
 
-          {/* Print / PDF Button */}
+          {/* Print / Download PDF */}
           <button
             onClick={handlePrint}
             className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors border border-slate-200"
@@ -176,14 +175,14 @@ export default function ReportEditorView({
         </div>
       </div>
 
-      {/* Edit Mode Prompt Banner Overlay */}
+      {/* Edit Mode Prompt Banner */}
       {isEditMode && (
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-3 px-6 flex items-center justify-between text-xs z-20 shadow-md">
+        <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 text-white p-3 px-6 flex items-center justify-between text-xs z-20 shadow-md">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-blue-200 animate-spin" />
             <span className="font-bold">局部 AI 框選微調模式：</span>
             <span className="text-blue-100 hidden sm:inline">
-              點擊下方報告中的任何區塊，或直接輸入提示詞讓 AI 修改該區域排版、價格或內文。
+              對當前報告輸入提示詞，讓 AI 重新排版圖表、修正數值或調整內文。
             </span>
           </div>
 
@@ -192,8 +191,8 @@ export default function ReportEditorView({
               type="text"
               value={editPrompt}
               onChange={(e) => setEditPrompt(e.target.value)}
-              placeholder="例如：將試算器調整為最大200台，並加上含稅說明..."
-              className="px-3 py-1.5 bg-white/10 text-white placeholder-blue-200 border border-white/20 rounded-lg text-xs w-64 focus:outline-none focus:bg-white/20"
+              placeholder="例如：將圖表改為柱狀圖，並將標題加大..."
+              className="px-3 py-1.5 bg-white/15 text-white placeholder-blue-200 border border-white/30 rounded-lg text-xs w-64 focus:outline-none focus:bg-white/25"
               disabled={isModifying}
             />
             <button
@@ -202,23 +201,23 @@ export default function ReportEditorView({
               className="bg-white text-blue-700 hover:bg-blue-50 font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all disabled:opacity-50"
             >
               <Send className="w-3 h-3" />
-              <span>{isModifying ? '修改中...' : '要求 AI 微調'}</span>
+              <span>{isModifying ? 'AI 微調中...' : '要求微調'}</span>
             </button>
           </form>
         </div>
       )}
 
-      {/* Paper Canvas Sandbox Container */}
+      {/* Dark Background Canvas for Paper Shadow Contrast */}
       <div className="flex-1 bg-slate-900 overflow-y-auto p-4 md:p-8 flex justify-center items-start">
         <div 
           className={`
-            bg-white transition-all duration-300 relative
-            ${isFullscreen ? 'w-full max-w-full rounded-none min-h-screen' : 'w-full max-w-5xl rounded-lg shadow-2xl min-h-[900px] my-4'}
+            bg-white transition-all duration-300 relative paper-shadow
+            ${isFullscreen ? 'w-full max-w-full rounded-none min-h-screen' : 'w-full max-w-5xl rounded-xl shadow-2xl min-h-[900px] my-4'}
             ${isEditMode ? 'ring-4 ring-blue-500/50' : ''}
           `}
         >
-          {/* Paper Shadow Header Bar inside paper */}
-          <div className="h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 rounded-t-lg" />
+          {/* Header Accent Bar */}
+          <div className="h-2 bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 rounded-t-xl" />
 
           {/* HTML5 Iframe Sandbox */}
           <iframe
@@ -226,7 +225,7 @@ export default function ReportEditorView({
             srcDoc={activeHtml}
             title={report.title}
             sandbox="allow-scripts allow-same-origin allow-modals allow-popups"
-            className="w-full min-h-[850px] border-none rounded-b-lg"
+            className="w-full min-h-[850px] border-none rounded-b-xl"
             style={{ height: isFullscreen ? 'calc(100vh - 60px)' : '900px' }}
           />
         </div>

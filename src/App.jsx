@@ -143,6 +143,7 @@ export default function App() {
         isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
         onReportGenerated={handleReportGenerated}
+        onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
       />
 
       {/* Floating Action Button (FAB) when Chat View is closed */}

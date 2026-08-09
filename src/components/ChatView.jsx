@@ -8,53 +8,57 @@ import {
   MicOff, 
   Paperclip, 
   Image as ImageIcon, 
-  Camera, 
   X, 
-  ChevronDown, 
   PlusCircle, 
   History, 
   Trash2, 
-  CheckCircle2, 
-  Clock, 
+  Loader2, 
+  Key,
   Sparkles,
-  Maximize2,
-  Minimize2,
-  ListTodo,
-  Loader2,
-  FileText
+  Database,
+  Search
 } from 'lucide-react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { processProcurementTask } from '../services/geminiAgent';
-import { getSessions, saveSessions } from '../services/reportStore';
+import { getSessions, saveSessions, getStoredApiKey } from '../services/reportStore';
 
 export default function ChatView({ 
   isOpen, 
   onClose, 
   onReportGenerated,
-  initialPrompt = ''
+  onOpenApiKeyModal
 }) {
-  const [sessions, setSessions] = useState(getSessions());
-  const [activeSessionId, setActiveSessionId] = useState(sessions[0]?.id || 'session-default');
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState('');
   const [inputText, setInputText] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [isComposing, setIsComposing] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
   
-  // Voice Recording state
+  // Web Speech API Voice Recording state
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recognitionRef = useRef(null);
   const recordingTimerRef = useRef(null);
 
-  // Agent Activity & Task Panel state
+  // Agent Activity state
   const [agentState, setAgentState] = useState('idle'); // idle | thinking | running_tool
   const [activityTimer, setActivityTimer] = useState(0);
   const [activityText, setActivityText] = useState('');
-  const [taskProgress, setTaskProgress] = useState(null);
 
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Load sessions on mount
+  useEffect(() => {
+    const loaded = getSessions();
+    setSessions(loaded);
+    if (loaded.length > 0) {
+      setActiveSessionId(loaded[0].id);
+    }
+  }, []);
 
   const activeSession = sessions.find(s => s.id === activeSessionId) || sessions[0];
   const messages = activeSession?.messages || [];
@@ -66,20 +70,7 @@ export default function ChatView({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, agentState, taskProgress]);
-
-  // Voice recording timer effect
-  useEffect(() => {
-    if (isRecording) {
-      setRecordingSeconds(0);
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingSeconds(s => s + 1);
-      }, 1000);
-    } else {
-      clearInterval(recordingTimerRef.current);
-    }
-    return () => clearInterval(recordingTimerRef.current);
-  }, [isRecording]);
+  }, [messages, agentState, activityText]);
 
   // Activity timer effect
   useEffect(() => {
@@ -93,17 +84,61 @@ export default function ChatView({
     return () => clearInterval(timer);
   }, [agentState]);
 
-  // Handle Voice Recording toggle
+  // Web Speech API Initialization & Toggle
   const toggleRecording = () => {
     if (isRecording) {
       // Stop recording
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
       setIsRecording(false);
-      // Insert simulated transcribed text into input box
-      const transcribedText = "請幫我評估採購 50 台高階人體工學椅，預算每台 15,000 元，請提供至少 20 項比價方案。";
-      setInputText(prev => prev ? `${prev} ${transcribedText}` : transcribedText);
+      clearInterval(recordingTimerRef.current);
     } else {
-      // Start recording
-      setIsRecording(true);
+      // Start recording using browser Web Speech API
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert('您的瀏覽器不支援 Web Speech 語音識別 API，請切換至 Chrome 或 Edge 瀏覽器嘗試。');
+        return;
+      }
+
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'zh-TW';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+
+        recognition.onresult = (event) => {
+          let transcript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          if (transcript) {
+            setInputText(prev => (prev ? `${prev} ${transcript}` : transcript));
+          }
+        };
+
+        recognition.onerror = (event) => {
+          console.error('Speech recognition error:', event.error);
+          setIsRecording(false);
+          clearInterval(recordingTimerRef.current);
+        };
+
+        recognition.onend = () => {
+          setIsRecording(false);
+          clearInterval(recordingTimerRef.current);
+        };
+
+        recognition.start();
+        recognitionRef.current = recognition;
+        setIsRecording(true);
+
+        setRecordingSeconds(0);
+        recordingTimerRef.current = setInterval(() => {
+          setRecordingSeconds(s => s + 1);
+        }, 1000);
+      } catch (err) {
+        console.error('Failed to start speech recognition:', err);
+      }
     }
   };
 
@@ -127,6 +162,12 @@ export default function ChatView({
     if (!cleanText && attachments.length === 0) return;
     if (agentState !== 'idle') return;
 
+    const apiKey = getStoredApiKey();
+    if (!apiKey) {
+      if (onOpenApiKeyModal) onOpenApiKeyModal();
+      return;
+    }
+
     // Create User Message
     const userMsg = {
       id: `user-${Date.now()}`,
@@ -142,17 +183,16 @@ export default function ChatView({
 
     setInputText('');
     setAttachments([]);
-    setAgentState('running_tool');
+    setAgentState('thinking');
+    setActivityText('AI 正在思考與規劃分析維度...');
 
-    // Call Agent Process Engine
+    // Call Direct AI Agent Engine
     const result = await processProcurementTask({
       userPrompt: cleanText,
       chatHistory: updatedMessages,
-      onProgress: (statusMsg) => {
-        setActivityText(statusMsg);
-      },
-      onTaskUpdate: (tasks) => {
-        setTaskProgress(tasks);
+      onActivityState: (state, text) => {
+        setAgentState(state);
+        setActivityText(text);
       }
     });
 
@@ -162,11 +202,11 @@ export default function ChatView({
       sender: 'agent',
       text: result.text,
       timestamp: new Date().toISOString(),
-      quickReplies: [
-        '一鍵切換全螢幕檢視',
-        '要求 AI 局部微調規格',
-        '另提超預算備選方案'
-      ]
+      quickReplies: result.reportHtml ? [
+        '開啟全螢幕簡報',
+        '進行局部 AI 框選微調',
+        '查詢更多庫存細節'
+      ] : undefined
     };
 
     const finalMessages = [...updatedMessages, agentMsg];
@@ -194,14 +234,14 @@ export default function ChatView({
   const handleNewSession = () => {
     const newSess = {
       id: `session-${Date.now()}`,
-      title: `新採購對話 ${sessions.length + 1}`,
+      title: `數據分析對話 ${sessions.length + 1}`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       messages: [
         {
           id: `msg-welcome`,
           sender: 'agent',
-          text: '您好！請在此輸入您的採購目標需求（如：品項、預算、數量、品牌偏好），我將為您發起廣泛比價與 HTML5 報告繪製。',
+          text: '您好！我是您的 **數據分析與比較報表小幫手**。\n\n我可以協助您查詢 Northwind 銷售庫存資料庫、搜尋公開市場數據，並繪製包含 Chart.js 的互動式 HTML5 報告。請直接說明您的分析或比價目標！',
           timestamp: new Date().toISOString()
         }
       ]
@@ -223,22 +263,24 @@ export default function ChatView({
 
   if (!isOpen) return null;
 
+  const apiKeyMissing = !getStoredApiKey();
+
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-full sm:w-[420px] h-[640px] max-h-[85vh] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in slide-in-from-bottom-5 duration-200">
+    <div className="fixed bottom-4 right-4 z-50 w-full sm:w-[440px] h-[660px] max-h-[88vh] bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden animate-in slide-in-from-bottom-5 duration-200">
       
       {/* Top Bar / Header */}
-      <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between z-10">
+      <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between z-10 border-b border-slate-800">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-white font-bold shadow-sm">
             <Bot className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="font-bold text-sm leading-none">AI 採購對話助手</h3>
+              <h3 className="font-extrabold text-sm leading-none text-white">分析報表小幫手</h3>
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
             </div>
             <p className="text-[10px] text-slate-400 mt-0.5 truncate max-w-[180px]">
-              {activeSession?.title || '新採購比價討論'}
+              {activeSession?.title || '數據分析對話'}
             </p>
           </div>
         </div>
@@ -258,17 +300,17 @@ export default function ChatView({
             <button
               onClick={() => setShowHistoryDropdown(!showHistoryDropdown)}
               className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-              title="歷史對話"
+              title="歷史對話紀錄"
             >
               <History className="w-4 h-4" />
             </button>
 
             {showHistoryDropdown && (
-              <div className="absolute right-0 top-8 w-56 bg-white text-slate-800 rounded-xl shadow-xl border border-slate-200 py-2 z-50 text-xs">
+              <div className="absolute right-0 top-8 w-60 bg-white text-slate-800 rounded-xl shadow-2xl border border-slate-200 py-2 z-50 text-xs">
                 <div className="px-3 py-1 font-bold text-slate-400 uppercase text-[10px]">
-                  歷史 Sessions ({sessions.length})
+                  歷史對話 ({sessions.length})
                 </div>
-                <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+                <div className="max-h-52 overflow-y-auto divide-y divide-slate-100">
                   {sessions.map(s => (
                     <div
                       key={s.id}
@@ -299,32 +341,48 @@ export default function ChatView({
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-            title="收闔 Chat View"
+            title="關閉對話視窗"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       </div>
 
+      {/* API Key Missing Notice Banner */}
+      {apiKeyMissing && (
+        <div className="bg-amber-500 text-slate-900 px-4 py-2 flex items-center justify-between text-xs font-bold border-b border-amber-600">
+          <div className="flex items-center gap-1.5">
+            <Key className="w-4 h-4" />
+            <span>未設定 API Key，無法呼叫 Gemini API。</span>
+          </div>
+          <button
+            onClick={onOpenApiKeyModal}
+            className="bg-slate-900 text-white px-2.5 py-1 rounded-md text-[11px] hover:bg-slate-800 transition-colors"
+          >
+            立即設定 Key
+          </button>
+        </div>
+      )}
+
       {/* Messages List Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
         {messages.map((msg) => (
           <div
             key={msg.id}
             className={`flex flex-col ${msg.sender === 'user' ? 'items-end' : 'items-start'}`}
           >
             <div
-              className={`max-w-[85%] rounded-2xl p-3.5 shadow-sm text-sm ${
+              className={`max-w-[88%] rounded-2xl p-3.5 shadow-sm text-sm ${
                 msg.sender === 'user'
                   ? 'bg-blue-600 text-white rounded-br-none'
-                  : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-none prose-chat'
+                  : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-none prose-chat shadow-slate-100'
               }`}
             >
               {/* Render User Attachments */}
               {msg.attachments && msg.attachments.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
                   {msg.attachments.map(att => (
-                    <span key={att.id} className="inline-flex items-center gap-1 text-xs bg-black/20 text-white px-2 py-1 rounded">
+                    <span key={att.id} className="inline-flex items-center gap-1 text-xs bg-black/20 text-white px-2 py-1 rounded-md">
                       <Paperclip className="w-3 h-3" /> {att.name}
                     </span>
                   ))}
@@ -345,7 +403,7 @@ export default function ChatView({
 
             {/* Quick Replies Action Chips */}
             {msg.quickReplies && (
-              <div className="flex flex-wrap gap-1.5 mt-2 max-w-[85%]">
+              <div className="flex flex-wrap gap-1.5 mt-2 max-w-[88%]">
                 {msg.quickReplies.map((qr, idx) => (
                   <button
                     key={idx}
@@ -360,38 +418,12 @@ export default function ChatView({
           </div>
         ))}
 
-        {/* Task Management Progress Panel (長任務步驟面板) */}
-        {taskProgress && agentState !== 'idle' && (
-          <div className="bg-white border border-blue-200 rounded-2xl p-3.5 shadow-md space-y-2 text-xs">
-            <div className="flex items-center justify-between font-bold text-slate-800 border-b border-slate-100 pb-2">
-              <span className="flex items-center gap-1.5 text-blue-600">
-                <ListTodo className="w-4 h-4" /> 長任務比價執行進度
-              </span>
-              <span className="text-[10px] text-slate-400">已執行 {activityTimer}s</span>
-            </div>
-
-            <div className="space-y-1.5">
-              {taskProgress.map(t => (
-                <div key={t.id} className="flex items-center justify-between text-slate-600">
-                  <div className="flex items-center gap-2">
-                    {t.status === 'completed' && <CheckCircle2 className="w-4 h-4 text-emerald-500" />}
-                    {t.status === 'running' && <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />}
-                    {t.status === 'pending' && <Clock className="w-4 h-4 text-slate-300" />}
-                    <span className={t.status === 'running' ? 'font-bold text-slate-900' : ''}>
-                      {t.title}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Agent Activity Bar */}
+        {/* Agent Activity Bar (真實工具執行狀態) */}
         {agentState !== 'idle' && (
-          <div className="flex items-center gap-2 text-xs text-slate-500 bg-blue-50/80 p-2.5 rounded-xl border border-blue-100 animate-pulse">
-            <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
-            <span>{activityText || 'AI 正在處理中...'} ({activityTimer}s)</span>
+          <div className="flex items-center gap-2.5 text-xs text-slate-700 bg-blue-50/90 p-3 rounded-xl border border-blue-200 shadow-sm animate-pulse">
+            <Loader2 className="w-4 h-4 text-blue-600 animate-spin flex-shrink-0" />
+            <span className="font-semibold">{activityText || 'AI 正在進行資料分析與工具調用...'}</span>
+            <span className="text-[10px] text-blue-500 font-mono ml-auto">{activityTimer}s</span>
           </div>
         )}
 
@@ -413,33 +445,33 @@ export default function ChatView({
         </div>
       )}
 
-      {/* Voice Mic Recording Bar */}
+      {/* Web Speech Voice Recording Status Bar */}
       {isRecording && (
         <div className="bg-red-500 text-white px-4 py-2 flex items-center justify-between text-xs animate-pulse font-bold">
           <div className="flex items-center gap-2">
             <Mic className="w-4 h-4 animate-bounce" />
-            <span>語音轉文字錄音中 ({recordingSeconds}s)... 說完請點擊結束</span>
+            <span>語音辨識錄音中 ({recordingSeconds}s)... 說完請點擊結束</span>
           </div>
           <button onClick={toggleRecording} className="bg-white text-red-600 px-2.5 py-1 rounded-md text-[11px]">
-            結束並帶入
+            結束語音帶入
           </button>
         </div>
       )}
 
       {/* Attachment Popover Menu */}
       {showAttachmentMenu && (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-xl p-2 absolute bottom-16 left-4 z-50 space-y-1 text-xs font-semibold">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-2xl p-2 absolute bottom-16 left-4 z-50 space-y-1 text-xs font-semibold">
           <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg text-slate-700"
           >
-            <Paperclip className="w-4 h-4 text-blue-600" /> 上傳文件 (CSV / PDF / TXT)
+            <Paperclip className="w-4 h-4 text-blue-600" /> 上傳數據文件 (CSV / PDF / TXT)
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg text-slate-700"
           >
-            <ImageIcon className="w-4 h-4 text-emerald-600" /> 上傳商品/規格圖片
+            <ImageIcon className="w-4 h-4 text-emerald-600" /> 上傳圖檔 / 規格圖片
           </button>
         </div>
       )}
@@ -452,7 +484,7 @@ export default function ChatView({
         className="hidden"
       />
 
-      {/* Bottom Input Area Structure per ai-agent-ui-support */}
+      {/* Bottom Input Area Structure per ai-agent-ui-support: [+] ___input___ [MIC][SEND] */}
       <form 
         onSubmit={(e) => {
           e.preventDefault();
@@ -465,7 +497,7 @@ export default function ChatView({
           type="button"
           onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
           className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition-colors"
-          title="新增附件 [+"
+          title="上傳附件 [+]"
         >
           <Plus className="w-5 h-5" />
         </button>
@@ -486,17 +518,18 @@ export default function ChatView({
               }
             }
           }}
-          placeholder="輸入採購目標、單價預算或比價要求..."
+          placeholder={apiKeyMissing ? "請先點擊上方設定 API Key..." : "輸入數據分析需求或報表生成指令..."}
           className="flex-1 bg-slate-100 border border-slate-200 px-3.5 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-          disabled={agentState !== 'idle'}
+          disabled={agentState !== 'idle' || apiKeyMissing}
         />
 
-        {/* [MIC] Speech to Text Button */}
+        {/* [MIC] Speech-to-Text Button */}
         <button
           type="button"
           onClick={toggleRecording}
+          disabled={apiKeyMissing}
           className={`p-2 rounded-xl transition-colors ${
-            isRecording ? 'mic-recording' : 'text-slate-500 hover:bg-slate-100'
+            isRecording ? 'bg-red-100 text-red-600 animate-pulse' : 'text-slate-500 hover:bg-slate-100'
           }`}
           title="語音轉文字 [MIC]"
         >
@@ -506,9 +539,9 @@ export default function ChatView({
         {/* [SEND] Button */}
         <button
           type="submit"
-          disabled={agentState !== 'idle' || (!inputText.trim() && attachments.length === 0)}
+          disabled={agentState !== 'idle' || (!inputText.trim() && attachments.length === 0) || apiKeyMissing}
           className="bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white p-2 rounded-xl transition-all shadow-sm flex-shrink-0"
-          title="發送訊息 [SEND]"
+          title="發送對話 [SEND]"
         >
           <Send className="w-5 h-5" />
         </button>
