@@ -31,7 +31,7 @@ export async function validateApiKey(apiKey, apiEndpoint) {
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.5-flash',
         contents: 'ping'
       });
       if (response) return true;
@@ -49,7 +49,7 @@ export async function validateApiKey(apiKey, apiEndpoint) {
 
 /**
  * Dynamically discover available model using SDK ai.models.list()
- * Supports custom gateway proxies (e.g. https://gemini.printii.com)
+ * STRICT RULE: Excludes ALL gemini-2.x models!
  */
 export async function getAvailableModel(ai) {
   try {
@@ -69,20 +69,21 @@ export async function getAvailableModel(ai) {
     }
 
     if (modelList.length > 0) {
-      // Filter out retired/deprecated models like gemini-2.0
+      // Filter out ALL gemini-2.x models strictly
       const validModels = modelList.filter(m => {
         const name = (m.name || '').toLowerCase();
         const methods = m.supportedGenerationMethods || [];
         const supportsGen = methods.length === 0 || methods.includes('generateContent');
-        return supportsGen && name.includes('gemini') && !name.includes('gemini-2.0');
+        return supportsGen && name.includes('gemini') && !name.includes('gemini-2.');
       });
 
       const selected = 
         validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
-        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-2.5-flash')) ||
-        validModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.6-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-flash-latest')) ||
         validModels[0] ||
-        modelList[0];
+        modelList.find(m => !(m.name || '').toLowerCase().includes('gemini-2.'));
 
       if (selected && selected.name) {
         return selected.name.replace(/^models\//, '');
@@ -92,19 +93,21 @@ export async function getAvailableModel(ai) {
     console.warn('ai.models.list() call warning on gateway proxy:', err);
   }
 
-  return 'gemini-2.5-flash';
+  return 'gemini-3.5-flash';
 }
 
 /**
  * Call generateContent with automatic 503/429 retry and fallback models
+ * STRICT RULE: NO gemini-2.x models in candidates!
  */
 async function callGenerateContentWithRetry(ai, primaryModel, contents, config, onActivityState) {
   const candidateModels = [
     primaryModel,
     'gemini-3.5-flash',
-    'gemini-2.5-flash',
-    'gemini-2.5-pro'
-  ].filter((m, i, arr) => m && arr.indexOf(m) === i);
+    'gemini-3.6-flash',
+    'gemini-3-flash',
+    'gemini-flash-latest'
+  ].filter(m => m && !m.toLowerCase().includes('gemini-2.')).filter((m, i, arr) => arr.indexOf(m) === i);
 
   let lastError = null;
 
@@ -374,13 +377,13 @@ export async function processProcurementTask({
     };
   }
 
-  if (onActivityState) onActivityState('thinking', '正在連線 Gemini API 閘道並選用模型...');
+  if (onActivityState) onActivityState('thinking', '正在連線 Gemini API 閘道並選用 Gemini 3.5+ 模型...');
   
-  let modelName = 'gemini-2.5-flash';
+  let modelName = 'gemini-3.5-flash';
   try {
     modelName = await getAvailableModel(ai);
   } catch (err) {
-    console.warn('getAvailableModel error, fallback to gemini-2.5-flash:', err);
+    console.warn('getAvailableModel error, fallback to gemini-3.5-flash:', err);
   }
 
   const systemInstruction = `You are a top-tier Data Analysis & Procurement Expert Assistant (數據分析與比較報表專家).
