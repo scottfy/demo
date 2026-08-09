@@ -1,25 +1,46 @@
 import { GoogleGenAI } from '@google/genai';
-import { getStoredApiKey } from './reportStore';
+import { getStoredApiKey, getStoredApiEndpoint } from './reportStore';
 
 const NORTHWIND_API_BASE = 'https://gemini.printii.com/northwind/api';
 
 /**
- * Validate Gemini API Key via models.list()
+ * Factory helper to instantiate GoogleGenAI with custom API endpoint (baseUrl) support
  */
-export async function validateApiKey(apiKey) {
+export function createGenAiClient(apiKeyOverride, endpointOverride) {
+  const apiKey = apiKeyOverride || getStoredApiKey();
+  const endpoint = endpointOverride !== undefined ? endpointOverride : getStoredApiEndpoint();
+
+  if (!apiKey || !apiKey.trim()) return null;
+
+  const config = { apiKey: apiKey.trim() };
+  if (endpoint && endpoint.trim()) {
+    config.httpOptions = { baseUrl: endpoint.trim() };
+  }
+
+  return new GoogleGenAI(config);
+}
+
+/**
+ * Validate Gemini API Key & Endpoint via SDK
+ */
+export async function validateApiKey(apiKey, apiEndpoint) {
   if (!apiKey || apiKey.trim() === '') return false;
   try {
-    const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-    const response = await ai.models.list();
-    if (response && Symbol.asyncIterator in Object(response)) {
-      for await (const m of response) {
-        if (m && m.name) return true;
-      }
+    const ai = createGenAiClient(apiKey, apiEndpoint);
+    if (!ai) return false;
+
+    try {
+      const response = await ai.models.list();
+      if (response) return true;
+    } catch (e) {
+      console.warn('ai.models.list() in validateApiKey failed, trying test generateContent...', e);
+      const testRes = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: 'ping'
+      });
+      if (testRes) return true;
     }
-    if (response && (Array.isArray(response) || Array.isArray(response.models) || Array.isArray(response.page))) {
-      return true;
-    }
-    return !!response;
+    return false;
   } catch (error) {
     console.error('API Key validation failed:', error);
     return false;
@@ -28,7 +49,7 @@ export async function validateApiKey(apiKey) {
 
 /**
  * Dynamically discover available model using SDK ai.models.list()
- * NO hardcoded fallback arrays, NO gemini-2.x models!
+ * Supports custom gateway proxies (e.g. https://gemini.printii.com)
  */
 export async function getAvailableModel(ai) {
   try {
@@ -47,37 +68,32 @@ export async function getAvailableModel(ai) {
       }
     }
 
-    // Filter models supporting generateContent and excluding gemini-2 models if newer exist
-    const validModels = modelList.filter(m => {
-      const name = m.name || '';
-      const methods = m.supportedGenerationMethods || [];
-      const supportsGen = methods.length === 0 || methods.includes('generateContent');
-      return supportsGen && name.toLowerCase().includes('gemini') && !name.toLowerCase().includes('gemini-2');
-    });
+    if (modelList.length > 0) {
+      const validModels = modelList.filter(m => {
+        const name = m.name || '';
+        const methods = m.supportedGenerationMethods || [];
+        const supportsGen = methods.length === 0 || methods.includes('generateContent');
+        return supportsGen && name.toLowerCase().includes('gemini');
+      });
 
-    // Fallback: If no non-gemini-2 model found, look for any gemini model supporting generateContent
-    const candidateModels = validModels.length > 0 ? validModels : modelList.filter(m => {
-      const name = m.name || '';
-      const methods = m.supportedGenerationMethods || [];
-      return (methods.length === 0 || methods.includes('generateContent')) && name.toLowerCase().includes('gemini');
-    });
+      const selected = 
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-2.5-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
+        validModels[0] ||
+        modelList[0];
 
-    // Pick top Flash or Flash-like model from available SDK models
-    const selected = 
-      candidateModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
-      candidateModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
-      candidateModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
-      candidateModels[0] ||
-      modelList[0];
-
-    if (selected && selected.name) {
-      return selected.name.replace(/^models\//, '');
+      if (selected && selected.name) {
+        return selected.name.replace(/^models\//, '');
+      }
     }
   } catch (err) {
-    console.warn('ai.models.list() call warning:', err);
+    console.warn('ai.models.list() call warning on gateway proxy:', err);
   }
 
-  throw new Error('無法透過 SDK 取得 Gemini 模型列表，請檢查 API Key 或網路權限。');
+  // Default model for custom API Gateway proxy if models.list is not proxied
+  return 'gemini-2.5-flash';
 }
 
 /**
@@ -165,11 +181,11 @@ function formatFriendlyError(error) {
   }
   
   if (errStr.includes('404') || errStr.includes('NOT_FOUND')) {
-    return `⚠️ **Gemini API 模型連線失敗 (404 Not Found)**\n\n無法呼叫指定 model，請確認您的 API Key 權限與帳號設定。`;
+    return `⚠️ **Gemini API 模型連線失敗 (404 Not Found)**\n\n無法呼叫指定 model，請確認您的 API Key 權限與閘道設定。`;
   }
 
   if (errStr.includes('API_KEY_INVALID') || errStr.includes('400')) {
-    return `❌ **無效的 Gemini API Key (400 Invalid Key)**\n\n請點擊右上角『設定 API Key』輸入正確的金鑰。`;
+    return `❌ **無效的 Gemini API Key (400 Invalid Key)**\n\n請點擊右上角『設定 API Key』輸入正確的金鑰與閘道端點。`;
   }
 
   return `❌ **Gemini API 呼叫失敗：** ${errStr}`;
@@ -190,24 +206,20 @@ export async function processProcurementTask({
   if (!apiKey || apiKey.trim() === '') {
     return {
       success: false,
-      text: `❌ **錯誤：未設定 Gemini API Key！**\n\n本系統已停用所有 Mock 模擬功能。請點擊右上角 **『設定 API Key』** 按鈕輸入您的 Gemini API Key，即可進行真實資料庫查詢、Google Search 市場檢索與 HTML5 報告動態繪製。`,
+      text: `❌ **錯誤：未設定 Gemini API Key！**\n\n本系統已停用所有 Mock 模擬功能。請點擊右上角 **『設定 API Key』** 按鈕輸入您的 Gemini API Key，即可進行真實資料庫查詢與 HTML5 報告動態繪製。`,
       reportHtml: null
     };
   }
 
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  const ai = createGenAiClient();
 
-  if (onActivityState) onActivityState('thinking', '正在透過 SDK 取得最適宜的 Gemini 模型...');
+  if (onActivityState) onActivityState('thinking', '正在連線 Gemini API 閘道並選用模型...');
   
   let modelName = '';
   try {
     modelName = await getAvailableModel(ai);
   } catch (err) {
-    return {
-      success: false,
-      text: formatFriendlyError(err),
-      reportHtml: null
-    };
+    modelName = 'gemini-2.5-flash';
   }
 
   const systemInstruction = `You are a top-tier Data Analysis & Procurement Expert Assistant (數據分析與比較報表專家).
@@ -366,7 +378,7 @@ export async function modifyReportBlock({ currentHtml, blockId, userPrompt, onPr
 
   if (onProgress) onProgress('🤖 正在透過 SDK 呼叫 Gemini AI 進行局部微調...', 3);
 
-  const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
+  const ai = createGenAiClient();
   const modelName = await getAvailableModel(ai);
 
   const prompt = `You are modifying an existing HTML report document based on user request.

@@ -3,7 +3,8 @@
 const STORAGE_KEYS = {
   REPORTS: 'ai_procurement_reports_v2',
   SESSIONS: 'ai_procurement_sessions_v2',
-  API_KEY: 'gemini_api_key'
+  API_KEY: 'gemini_api_key',
+  API_ENDPOINT: 'gemini_api_endpoint'
 };
 
 export const getStoredApiKey = () => {
@@ -15,6 +16,18 @@ export const setStoredApiKey = (key) => {
     localStorage.setItem(STORAGE_KEYS.API_KEY, key.trim());
   } else {
     localStorage.removeItem(STORAGE_KEYS.API_KEY);
+  }
+};
+
+export const getStoredApiEndpoint = () => {
+  return localStorage.getItem(STORAGE_KEYS.API_ENDPOINT) || 'https://gemini.printii.com';
+};
+
+export const setStoredApiEndpoint = (endpoint) => {
+  if (endpoint) {
+    localStorage.setItem(STORAGE_KEYS.API_ENDPOINT, endpoint.trim());
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.API_ENDPOINT);
   }
 };
 
@@ -71,7 +84,7 @@ export const getSessions = () => {
           {
             id: 'msg-1',
             sender: 'agent',
-            text: '您好！我是您的 **AI 採購比價助手**。\n\n⚠️ **請注意**：本系統已停用 Mock 模擬數據。請先點選右上角 **『設定 API Key』** 輸入您的 Gemini API Key，然後在此說明採購目標需求（如品項、預算、數量），我將為您執行比價並產出動態 HTML5 報告。',
+            text: '您好！我是您的 **數據分析與比較報表小幫手**。\n\n⚠️ **請注意**：本系統已停用 Mock 模擬數據。請先點選右上角 **『設定 API Key』** 設定您的 API Key 與 API 閘道端點 (預設為 `https://gemini.printii.com`)，然後在此說明採購目標與數據分析需求，我將為您發起即時比對與 HTML5 互動報告繪製。',
             timestamp: new Date().toISOString()
           }
         ]
