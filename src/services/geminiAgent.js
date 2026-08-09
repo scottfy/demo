@@ -186,7 +186,7 @@ async function executeDbTool(name, args) {
       return JSON.stringify({
         query: query || '',
         status: 'search_completed',
-        info: `已完成關鍵字 "${query}" 之公開網路與市場資料檢索。請勿再重複發送搜尋，請立即根據已知數據與領域知識撰寫深度分析報告，並包含完整 HTML5 報告畫布。`
+        info: `已完成關鍵字 "${query}" 之公開網路資料檢索。`
       });
     }
 
@@ -351,6 +351,7 @@ function extractTitleFromHtml(html) {
 
 /**
  * Main Direct User-AI Agent Conversation Engine
+ * Architecture: Two-Phase Pipeline (Data Retrieval Phase -> Clean Synthesis Phase)
  */
 export async function processProcurementTask({
   userPrompt,
@@ -403,83 +404,43 @@ Capabilities & Rules:
 
 Always respond in Traditional Chinese (繁體中文).`;
 
-  // Build message contents history
-  const contents = [];
-  
-  // Format past history if provided
-  chatHistory.slice(-10).forEach(msg => {
+  // PHASE 1: Data Retrieval Phase (Tool Call Execution)
+  const initialContents = [];
+  chatHistory.slice(-6).forEach(msg => {
     if (msg.sender === 'user') {
-      contents.push({ role: 'user', parts: [{ text: msg.text || '' }] });
+      initialContents.push({ role: 'user', parts: [{ text: msg.text || '' }] });
     } else if (msg.sender === 'agent' && msg.text) {
-      contents.push({ role: 'model', parts: [{ text: msg.text }] });
+      initialContents.push({ role: 'model', parts: [{ text: msg.text }] });
     }
   });
+  initialContents.push({ role: 'user', parts: [{ text: userPrompt }] });
 
-  // Append latest user prompt
-  contents.push({ role: 'user', parts: [{ text: userPrompt }] });
+  const toolsConfig = [{ functionDeclarations: dbFunctionDeclarations }];
+  const collectedToolResults = [];
+  let toolLoopCount = 0;
+  const maxToolTurns = 2;
 
-  const toolsConfig = [
-    { functionDeclarations: dbFunctionDeclarations }
-  ];
+  while (toolLoopCount < maxToolTurns) {
+    toolLoopCount++;
+    if (onActivityState) {
+      onActivityState('running_tool', `正在進行資料庫/網路檢索 (第 ${toolLoopCount} 輪)...`);
+    }
 
-  let loopCount = 0;
-  let toolCallCount = 0;
-  const maxToolCalls = 2; // Limit search/DB calls to max 2 turns before forcing report generation
-  const maxLoops = 4;
-  let finalMarkdownText = '';
-
-  try {
-    while (loopCount < maxLoops) {
-      loopCount++;
-
-      // If max tool calls reached, pass empty tools config so model MUST generate final text & HTML
-      const currentToolsConfig = (toolCallCount >= maxToolCalls) ? [] : toolsConfig;
-
-      if (onActivityState) {
-        onActivityState('running_tool', `正在呼叫 Gemini (${modelName}) 進行資料分析 (第 ${loopCount} 輪)...`);
-      }
-
-      // If we are forcing conclusion on final loop or maxToolCalls reached, prompt model explicitly
-      if (toolCallCount >= maxToolCalls && contents[contents.length - 1].role !== 'user') {
-        contents.push({
-          role: 'user',
-          parts: [{ text: '請根據上述檢索與數據資料，立即輸出完整詳細的繁體中文分析說明與包含 Chart.js 的 HTML5 報告畫布（包覆於 ```html ... ``` 中）。' }]
-        });
-      }
-
-      const { response, usedModel } = await callGenerateContentWithRetry(
-        ai, 
-        modelName, 
-        contents, 
-        { systemInstruction, tools: currentToolsConfig },
+    try {
+      const { response } = await callGenerateContentWithRetry(
+        ai,
+        modelName,
+        initialContents,
+        { systemInstruction, tools: toolsConfig },
         onActivityState
       );
 
-      modelName = usedModel;
-
       const candidate = response.candidates?.[0];
-      if (!candidate) {
-        throw new Error('Gemini API 未能傳回有效的 Candidate 回應。');
-      }
-
-      const modelContent = candidate.content;
-      const parts = modelContent?.parts || [];
-
-      // Accumulate text from this turn if any
-      const turnText = parts.map(p => p.text || '').filter(Boolean).join('\n');
-      if (turnText) {
-        finalMarkdownText = finalMarkdownText ? `${finalMarkdownText}\n${turnText}` : turnText;
-      }
-
-      // Check for function calls
+      const parts = candidate?.content?.parts || [];
       const functionCallParts = parts.filter(p => p.functionCall);
 
-      if (functionCallParts.length > 0 && toolCallCount < maxToolCalls) {
-        toolCallCount++;
-
-        // Record model turn in conversation history
-        contents.push(modelContent);
-
+      if (functionCallParts.length > 0) {
+        initialContents.push(candidate.content);
         const responseParts = [];
 
         for (const callPart of functionCallParts) {
@@ -495,6 +456,7 @@ Always respond in Traditional Chinese (繁體中文).`;
           }
 
           const toolResultStr = await executeDbTool(toolName, toolArgs);
+          collectedToolResults.push({ toolName, toolArgs, resultSnippet: toolResultStr.slice(0, 1500) });
 
           responseParts.push({
             functionResponse: {
@@ -504,77 +466,76 @@ Always respond in Traditional Chinese (繁體中文).`;
           });
         }
 
-        // Add tool responses back to conversation contents
-        contents.push({
-          role: 'user',
-          parts: responseParts
-        });
-
-        // Continue loop to get model text after tool execution
+        initialContents.push({ role: 'user', parts: responseParts });
         continue;
       }
-
-      // No function calls or max tool calls reached: finished generation
+      break;
+    } catch (e) {
+      console.warn('Tool loop turn failed:', e);
       break;
     }
-
-    // If finalMarkdownText is still short or missing, force a direct text generation call
-    if (!finalMarkdownText || finalMarkdownText.length < 50) {
-      if (onActivityState) onActivityState('thinking', '正在為您整合撰寫詳細分析報告...');
-      contents.push({
-        role: 'user',
-        parts: [{ text: '請根據上述查詢資料與需求，為我撰寫完整豐富的繁體中文分析與 HTML5 報告（包覆於 ```html ... ``` 中）。' }]
-      });
-
-      const { response: finalResp } = await callGenerateContentWithRetry(
-        ai,
-        modelName,
-        contents,
-        { systemInstruction },
-        onActivityState
-      );
-
-      finalMarkdownText = finalResp.text || (finalResp.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('\n');
-    }
-
-    // Extract HTML report block
-    let rawReportHtml = extractReportHtml(finalMarkdownText);
-    let reportHtml = null;
-    let reportTitle = '數據分析與比對評估報告';
-
-    if (rawReportHtml) {
-      reportTitle = extractTitleFromHtml(rawReportHtml) || '數據分析與比對評估報告';
-      reportHtml = wrapFullHtmlDoc(rawReportHtml, reportTitle);
-    }
-
-    // Clean up final markdown text for Chat View message bubble (keep markdown text, strip html block)
-    let chatSummaryText = finalMarkdownText
-      .replace(/```html[\s\S]*?```/gi, '')
-      .trim();
-
-    if (!chatSummaryText || chatSummaryText.length < 15) {
-      if (reportHtml) {
-        chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含 Chart.js 數據視覺化與動態調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
-      } else {
-        chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText || '分析已完成。'}`;
-      }
-    }
-
-    return {
-      success: true,
-      text: chatSummaryText,
-      reportTitle,
-      reportHtml
-    };
-
-  } catch (error) {
-    console.error('Process procurement task error:', error);
-    return {
-      success: false,
-      text: formatFriendlyError(error),
-      reportHtml: null
-    };
   }
+
+  // PHASE 2: Clean Synthesis & Report Generation Phase
+  if (onActivityState) onActivityState('thinking', '正在整合分析結果並繪製 HTML5 報告畫布...');
+
+  let synthesisPromptText = `使用者分析與報告需求：${userPrompt}`;
+
+  if (collectedToolResults.length > 0) {
+    synthesisPromptText += `\n\n已成功為您檢索與查詢之實時數據資料：\n${JSON.stringify(collectedToolResults, null, 2)}`;
+  }
+
+  synthesisPromptText += `\n\n請以世界頂尖專家標準，提供詳細且結構完整的繁體中文分析論述，並在回答末尾輸出完整可執行的 HTML5 報告畫布程式碼（務必包覆於 \`\`\`html ... \`\`\` 內）。`;
+
+  const finalContents = [
+    { role: 'user', parts: [{ text: synthesisPromptText }] }
+  ];
+
+  const { response: finalResponse } = await callGenerateContentWithRetry(
+    ai,
+    modelName,
+    finalContents,
+    { systemInstruction }, // Pure generation call without tools parameter!
+    onActivityState
+  );
+
+  const candidate = finalResponse.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
+  let finalMarkdownText = finalResponse.text || parts.map(p => p.text || '').filter(Boolean).join('\n');
+
+  if (!finalMarkdownText || finalMarkdownText.length < 20) {
+    throw new Error('Gemini API 未能傳回有效的分析說明與報告內容。');
+  }
+
+  // Step 3: Extract HTML report block
+  let rawReportHtml = extractReportHtml(finalMarkdownText);
+  let reportHtml = null;
+  let reportTitle = '數據分析與比對評估報告';
+
+  if (rawReportHtml) {
+    reportTitle = extractTitleFromHtml(rawReportHtml) || '數據分析與比對評估報告';
+    reportHtml = wrapFullHtmlDoc(rawReportHtml, reportTitle);
+  }
+
+  // Step 4: Clean up final markdown text for Chat View message bubble
+  let chatSummaryText = finalMarkdownText
+    .replace(/```html[\s\S]*?```/gi, '')
+    .trim();
+
+  if (!chatSummaryText || chatSummaryText.length < 15) {
+    if (reportHtml) {
+      chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含 Chart.js 數據視覺化與動態調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
+    } else {
+      chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText}`;
+    }
+  }
+
+  return {
+    success: true,
+    text: chatSummaryText,
+    reportTitle,
+    reportHtml
+  };
 }
 
 /**
