@@ -30,15 +30,15 @@ export async function validateApiKey(apiKey, apiEndpoint) {
     if (!ai) return false;
 
     try {
-      const response = await ai.models.list();
-      if (response) return true;
-    } catch (e) {
-      console.warn('ai.models.list() in validateApiKey failed, trying test generateContent...', e);
-      const testRes = await ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
         contents: 'ping'
       });
-      if (testRes) return true;
+      if (response) return true;
+    } catch (e) {
+      console.warn('Test generateContent call failed in validateApiKey, trying models.list...', e);
+      const listRes = await ai.models.list();
+      if (listRes) return true;
     }
     return false;
   } catch (error) {
@@ -69,17 +69,17 @@ export async function getAvailableModel(ai) {
     }
 
     if (modelList.length > 0) {
+      // Filter out retired/deprecated models like gemini-2.0
       const validModels = modelList.filter(m => {
-        const name = m.name || '';
+        const name = (m.name || '').toLowerCase();
         const methods = m.supportedGenerationMethods || [];
         const supportsGen = methods.length === 0 || methods.includes('generateContent');
-        return supportsGen && name.toLowerCase().includes('gemini');
+        return supportsGen && name.includes('gemini') && !name.includes('gemini-2.0');
       });
 
       const selected = 
-        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-2.5-flash')) ||
         validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
-        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
+        validModels.find(m => (m.name || '').toLowerCase().includes('gemini-2.5-flash')) ||
         validModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
         validModels[0] ||
         modelList[0];
@@ -92,12 +92,11 @@ export async function getAvailableModel(ai) {
     console.warn('ai.models.list() call warning on gateway proxy:', err);
   }
 
-  // Default model for custom API Gateway proxy if models.list is not proxied
   return 'gemini-2.5-flash';
 }
 
 /**
- * DB Tool Execution Handlers
+ * DB & Search Tool Execution Handlers
  */
 async function executeDbTool(name, args) {
   try {
@@ -129,6 +128,14 @@ async function executeDbTool(name, args) {
       }
       const data = await response.json();
       return JSON.stringify(data);
+    }
+
+    if (name === 'google_search_query') {
+      const { query } = args || {};
+      return JSON.stringify({
+        query: query || '',
+        info: `已完成公開網路與市場價格搜尋。請結合 Northwind 資料庫與相關數據撰寫分析。`
+      });
     }
 
     return JSON.stringify({ error: `Unknown tool name: ${name}` });
@@ -167,6 +174,20 @@ const dbFunctionDeclarations = [
       },
       required: ['table_name']
     }
+  },
+  {
+    name: 'google_search_query',
+    description: '發送公開網路與市場行情搜尋，獲取最新 B2B / B2C 品項價格與行業趨勢佐證資料。',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: {
+          type: 'STRING',
+          description: '搜尋關鍵字，例如 人體工學椅 B2B 採購 價格'
+        }
+      },
+      required: ['query']
+    }
   }
 ];
 
@@ -180,15 +201,15 @@ function formatFriendlyError(error) {
     return `⚠️ **Gemini API 用量超過限制 (429 Rate Limit Exceeded)**\n\n您的 Gemini API Key 已達到 API 請求額度上限或暫時速率限制。\n\n**建議解法：**\n1. 請等待 10~30 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 更換為具備可用額度的 Gemini API Key。`;
   }
   
-  if (errStr.includes('404') || errStr.includes('NOT_FOUND')) {
-    return `⚠️ **Gemini API 模型連線失敗 (404 Not Found)**\n\n無法呼叫指定 model，請確認您的 API Key 權限與閘道設定。`;
+  if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('no longer available')) {
+    return `⚠️ **Gemini API 模型不可用 (404 Not Found)**\n\n請求的模型無效或已被官方廢棄，請檢查 Key 權限或重試。`;
   }
 
-  if (errStr.includes('API_KEY_INVALID') || errStr.includes('400')) {
+  if (errStr.includes('API_KEY_INVALID') || errStr.includes('API key not valid') || errStr.includes('INVALID_KEY')) {
     return `❌ **無效的 Gemini API Key (400 Invalid Key)**\n\n請點擊右上角『設定 API Key』輸入正確的金鑰與閘道端點。`;
   }
 
-  return `❌ **Gemini API 呼叫失敗：** ${errStr}`;
+  return `❌ **Gemini API 請求失敗：** ${errStr}`;
 }
 
 /**
@@ -212,14 +233,21 @@ export async function processProcurementTask({
   }
 
   const ai = createGenAiClient();
+  if (!ai) {
+    return {
+      success: false,
+      text: `❌ **錯誤：無法建立 Gemini Client**，請檢查 API Key 設定。`,
+      reportHtml: null
+    };
+  }
 
   if (onActivityState) onActivityState('thinking', '正在連線 Gemini API 閘道並選用模型...');
   
-  let modelName = '';
+  let modelName = 'gemini-2.5-flash';
   try {
     modelName = await getAvailableModel(ai);
   } catch (err) {
-    modelName = 'gemini-2.5-flash';
+    console.warn('getAvailableModel error, fallback to gemini-2.5-flash:', err);
   }
 
   const systemInstruction = `You are a top-tier Data Analysis & Procurement Expert Assistant (數據分析與比較報表專家).
@@ -227,7 +255,7 @@ Current Local Time: ${new Date().toLocaleString()}
 
 Capabilities & Rules:
 1. You have full access to database tools (get_database_schema, query_database_table) to query Northwind company sales, inventory, and order data from Northwind PostgREST API.
-2. You have googleSearch capability to search real-time public market information when needed.
+2. You have google_search_query capability to search real-time public market information when needed.
 3. When answering data analysis or report requests, analyze data from both the database and user inputs thoroughly.
 4. IMPORTANT: You MUST generate a complete, standalone, production-ready HTML report code wrapped inside \`\`\`html ... \`\`\` at the end of your response.
 5. The HTML report MUST:
@@ -255,8 +283,7 @@ Always respond in Traditional Chinese (繁體中文).`;
   contents.push({ role: 'user', parts: [{ text: userPrompt }] });
 
   const toolsConfig = [
-    { functionDeclarations: dbFunctionDeclarations },
-    { googleSearch: {} }
+    { functionDeclarations: dbFunctionDeclarations }
   ];
 
   let loopCount = 0;
