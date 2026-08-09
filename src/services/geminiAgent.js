@@ -134,7 +134,7 @@ async function executeDbTool(name, args) {
       const { query } = args || {};
       return JSON.stringify({
         query: query || '',
-        info: `已完成公開網路與市場價格搜尋。請結合 Northwind 資料庫與相關數據撰寫分析。`
+        info: `已完成公開網路與市場價格搜尋。請結合 Northwind 資料庫與相關數據撰寫分析報告。`
       });
     }
 
@@ -213,6 +213,81 @@ function formatFriendlyError(error) {
 }
 
 /**
+ * Multi-stage HTML Report Extractor
+ */
+function extractReportHtml(text) {
+  if (!text) return null;
+
+  // 1. Try ```html ... ``` block
+  const htmlBlockMatch = text.match(/```html([\s\S]*?)```/i);
+  if (htmlBlockMatch && htmlBlockMatch[1] && htmlBlockMatch[1].trim().length > 10) {
+    return htmlBlockMatch[1].trim();
+  }
+
+  // 2. Try generic ``` ... ``` block containing HTML tags
+  const codeBlockMatch = text.match(/```([\s\S]*?)```/);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    const codeContent = codeBlockMatch[1].trim();
+    if (/<(html|div|table|h1|h2|section|article|body|style)/i.test(codeContent)) {
+      return codeContent;
+    }
+  }
+
+  // 3. Try finding <html>...</html> or <!DOCTYPE html>...
+  const fullDocMatch = text.match(/<html[\s\S]*?<\/html>/i) || text.match(/<!DOCTYPE html>[\s\S]*/i);
+  if (fullDocMatch && fullDocMatch[0]) {
+    return fullDocMatch[0].trim();
+  }
+
+  // 4. Try finding starting at first HTML tag <h1, <div, <table, <section, <style
+  const tagStartMatch = text.match(/<(h1|div|table|section|article|header|main)[\s\S]*/i);
+  if (tagStartMatch && tagStartMatch[0] && tagStartMatch[0].length > 20) {
+    return tagStartMatch[0].trim();
+  }
+
+  return null;
+}
+
+/**
+ * Wrap standalone HTML snippet into clean HTML5 document with Chart.js
+ */
+function wrapFullHtmlDoc(htmlSnippet, title) {
+  if (htmlSnippet.includes('<!DOCTYPE html>') || htmlSnippet.includes('<html')) {
+    return htmlSnippet;
+  }
+  return `<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 24px; background: #ffffff; color: #1e293b; }
+    h1 { color: #0f172a; border-bottom: 2px solid #2563eb; padding-bottom: 8px; font-size: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th, td { border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; font-size: 0.875rem; }
+    th { background: #f1f5f9; font-weight: bold; color: #0f172a; }
+    tr:nth-child(even) { background: #f8fafc; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  ${htmlSnippet}
+</body>
+</html>`;
+}
+
+function extractTitleFromHtml(html) {
+  if (!html) return null;
+  const match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || html.match(/<title>([\s\S]*?)<\/title>/i);
+  if (match && match[1]) {
+    return match[1].replace(/<[^>]+>/g, '').trim();
+  }
+  return null;
+}
+
+/**
  * Main Direct User-AI Agent Conversation Engine
  */
 export async function processProcurementTask({
@@ -254,7 +329,7 @@ export async function processProcurementTask({
 Current Local Time: ${new Date().toLocaleString()}
 
 Capabilities & Rules:
-1. You have full access to database tools (get_database_schema, query_database_table) to query Northwind company sales, inventory, and order data from Northwind PostgREST API.
+1. You have full access to database tools (get_database_schema, query_database_table) to query Northwind company sales, inventory, customer, and order data from Northwind PostgREST API.
 2. You have google_search_query capability to search real-time public market information when needed.
 3. When answering data analysis or report requests, analyze data from both the database and user inputs thoroughly.
 4. IMPORTANT: You MUST generate a complete, standalone, production-ready HTML report code wrapped inside \`\`\`html ... \`\`\` at the end of your response.
@@ -315,6 +390,12 @@ Always respond in Traditional Chinese (繁體中文).`;
       const modelContent = candidate.content;
       const parts = modelContent?.parts || [];
 
+      // Accumulate text from this turn if any
+      const turnText = parts.map(p => p.text || '').filter(Boolean).join('\n');
+      if (turnText) {
+        finalMarkdownText = finalMarkdownText ? `${finalMarkdownText}\n${turnText}` : turnText;
+      }
+
       // Check for function calls
       const functionCallParts = parts.filter(p => p.functionCall);
 
@@ -356,31 +437,49 @@ Always respond in Traditional Chinese (繁體中文).`;
         continue;
       }
 
-      // No function calls: extract text response
-      finalMarkdownText = response.text || parts.map(p => p.text || '').join('\n');
+      // No function calls: finished generation
       break;
     }
 
-    if (!finalMarkdownText) {
-      finalMarkdownText = 'AI 分析已完成，但未輸出文字摘要。';
-    }
-
     // Extract HTML report block
-    let reportHtml = '';
-    const match = finalMarkdownText.match(/```html([\s\S]*?)```/);
-    if (match && match[1]) {
-      reportHtml = match[1].trim();
-    } else if (finalMarkdownText.includes('<!DOCTYPE html>') || finalMarkdownText.includes('<html')) {
-      reportHtml = finalMarkdownText.trim();
+    let rawReportHtml = extractReportHtml(finalMarkdownText);
+    let reportHtml = null;
+    let reportTitle = '數據分析與比對評估報告';
+
+    if (rawReportHtml) {
+      reportTitle = extractTitleFromHtml(rawReportHtml) || '數據分析與比對評估報告';
+      reportHtml = wrapFullHtmlDoc(rawReportHtml, reportTitle);
     }
 
-    const reportTitle = extractTitleFromHtml(reportHtml) || '數據分析與比對評估報告';
+    // Clean up final markdown text for Chat View message bubble
+    let chatSummaryText = finalMarkdownText
+      .replace(/```html[\s\S]*?```/gi, '')
+      .replace(/```[\s\S]*?```/g, '')
+      .trim();
+
+    // If chatSummaryText contains raw HTML tags, strip them for clean chat display
+    if (/<(html|div|table|h1|h2|body|style)/i.test(chatSummaryText)) {
+      chatSummaryText = chatSummaryText
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    // Ensure a rich, informative Chinese summary message if summary is short or empty
+    if (!chatSummaryText || chatSummaryText.length < 15) {
+      if (reportHtml) {
+        chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含圖表視覺化與動態數值調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
+      } else {
+        chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText || '（無額外說明）'}`;
+      }
+    }
 
     return {
       success: true,
-      text: finalMarkdownText,
+      text: chatSummaryText,
       reportTitle,
-      reportHtml: reportHtml || null
+      reportHtml
     };
 
   } catch (error) {
@@ -427,23 +526,10 @@ Maintain standard modern CSS styling, Chart.js code, dynamic interactive scripts
     });
 
     const text = response.text || '';
-    const match = text.match(/```html([\s\S]*?)```/);
-    if (match && match[1]) {
-      return match[1].trim();
-    } else if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-      return text.trim();
-    }
-    throw new Error('Gemini API 未能傳回有效的修改後 HTML 報告程式碼。');
+    const rawHtml = extractReportHtml(text) || text.trim();
+    const title = extractTitleFromHtml(rawHtml) || '微調報告';
+    return wrapFullHtmlDoc(rawHtml, title);
   } catch (e) {
     throw new Error(formatFriendlyError(e));
   }
-}
-
-function extractTitleFromHtml(html) {
-  if (!html) return null;
-  const match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i) || html.match(/<title>([\s\S]*?)<\/title>/i);
-  if (match && match[1]) {
-    return match[1].replace(/<[^>]+>/g, '').trim();
-  }
-  return null;
 }
