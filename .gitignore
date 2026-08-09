@@ -31,3 +31,5 @@ dist-ssr
 *.json.service-account
 service-account*.json
 .credential-fields.json
+.vercel
+.env*
