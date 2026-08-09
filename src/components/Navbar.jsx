@@ -4,11 +4,8 @@ import {
   Key, 
   Menu, 
   Sparkles, 
-  Maximize2, 
-  PlusCircle, 
-  Search,
-  ShieldCheck,
-  Zap
+  PlusCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { getStoredApiKey } from '../services/reportStore';
 
@@ -48,11 +45,11 @@ export default function Navbar({
                 AI 採購比價助手
               </h1>
               <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                <Sparkles className="w-2.5 h-2.5 text-blue-600" /> v2.5 HTML5 Sandbox
+                <Sparkles className="w-2.5 h-2.5 text-blue-600" /> v2.5 Pure AI Mode
               </span>
             </div>
             <p className="text-xs text-slate-500 hidden sm:block">
-              動態 HTML5 沙盒報告繪製與 20+ 多平台比價引擎
+              真實 Gemini AI 驅動動態 HTML5 沙盒報告與採購比價
             </p>
           </div>
         </div>
@@ -72,18 +69,22 @@ export default function Navbar({
         {/* API Key Setting Modal Trigger */}
         <button
           onClick={onOpenApiKeyModal}
-          className={`text-xs font-semibold px-3 py-2 rounded-lg border flex items-center gap-1.5 transition-colors ${
+          className={`text-xs font-bold px-3 py-2 rounded-lg border flex items-center gap-1.5 transition-colors ${
             hasKey
               ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-              : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
+              : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100 animate-pulse'
           }`}
           title="設定 Gemini API 金鑰"
         >
-          <Key className={`w-3.5 h-3.5 ${hasKey ? 'text-emerald-600' : 'text-amber-600'}`} />
+          {hasKey ? (
+            <Key className="w-3.5 h-3.5 text-emerald-600" />
+          ) : (
+            <AlertTriangle className="w-3.5 h-3.5 text-red-600" />
+          )}
           <span className="hidden md:inline">
-            {hasKey ? 'Gemini API 已連接' : '模擬測試模式 (點此輸入 Key)'}
+            {hasKey ? 'Gemini API 已連接' : '未設定 API Key (請點此設定)'}
           </span>
-          <span className="md:hidden">API Key</span>
+          <span className="md:hidden">{hasKey ? 'API Key OK' : '缺少 Key'}</span>
         </button>
       </div>
     </header>

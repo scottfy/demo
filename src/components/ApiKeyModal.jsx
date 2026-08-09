@@ -14,8 +14,7 @@ export default function ApiKeyModal({ isOpen, onClose }) {
     e.preventDefault();
     if (!keyInput.trim()) {
       setStoredApiKey('');
-      setStatusMessage({ type: 'info', text: '已改為模擬測試模式。' });
-      setTimeout(onClose, 800);
+      setStatusMessage({ type: 'error', text: '⚠️ 已清除 Key。請注意：未設定 API Key 時將無法發起 AI 比價。' });
       return;
     }
 
@@ -30,7 +29,7 @@ export default function ApiKeyModal({ isOpen, onClose }) {
       setStatusMessage({ type: 'success', text: '✅ Gemini API Key 驗證成功！已儲存。' });
       setTimeout(onClose, 1000);
     } else {
-      setStatusMessage({ type: 'error', text: '❌ API Key 驗證失敗，請檢查 Key 是否正確或具備存取權限。' });
+      setStatusMessage({ type: 'error', text: '❌ API Key 驗證失敗！請檢查 Key 是否正確或具備存取權限。' });
     }
   };
 
@@ -52,18 +51,18 @@ export default function ApiKeyModal({ isOpen, onClose }) {
             <Key className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="font-extrabold text-slate-900 text-lg">設定 Gemini API 金鑰</h3>
-            <p className="text-xs text-slate-500">啟用真實大語言模型進行多平台比價與 HTML5 報告繪製</p>
+            <h3 className="font-extrabold text-slate-900 text-lg">設定 Gemini API 金鑰 (必要)</h3>
+            <p className="text-xs text-slate-500">本系統已停用 Mock 模式，必須輸入有效的 Key 才能執行 AI 採購比價</p>
           </div>
         </div>
 
         {/* Info Banner */}
-        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3.5 text-xs text-blue-800 space-y-1">
-          <div className="font-bold flex items-center gap-1.5 text-blue-900">
-            <Shield className="w-4 h-4 text-blue-600" /> 金鑰安全聲明
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 space-y-1">
+          <div className="font-bold flex items-center gap-1.5 text-amber-950">
+            <Shield className="w-4 h-4 text-amber-700" /> API 金鑰使用與安全說明
           </div>
-          <p className="text-blue-700 leading-relaxed">
-            API Key 僅於您的個人瀏覽器端以 `@google/genai` 進行驗證，絕不會傳送至本機以外的第三方伺服器。若未輸入，系統將使用預載強大比價引擎 (Mock Engine)。
+          <p className="text-amber-800 leading-relaxed">
+            API Key 僅於您的瀏覽器本機端以 Google 官方 SDK (`@google/genai`) 進行 API 請求驗證，絕不會傳送或儲存至第三方伺服器。
           </p>
         </div>
 
@@ -110,7 +109,7 @@ export default function ApiKeyModal({ isOpen, onClose }) {
                 onClick={onClose}
                 className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-semibold"
               >
-                取消
+                關閉
               </button>
 
               <button
