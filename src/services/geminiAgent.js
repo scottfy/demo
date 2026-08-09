@@ -10,8 +10,16 @@ export async function validateApiKey(apiKey) {
   if (!apiKey || apiKey.trim() === '') return false;
   try {
     const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-    const result = await ai.models.list();
-    return Array.isArray(result) || !!result;
+    const response = await ai.models.list();
+    if (response && Symbol.asyncIterator in Object(response)) {
+      for await (const m of response) {
+        if (m && m.name) return true;
+      }
+    }
+    if (response && (Array.isArray(response) || Array.isArray(response.models) || Array.isArray(response.page))) {
+      return true;
+    }
+    return !!response;
   } catch (error) {
     console.error('API Key validation failed:', error);
     return false;
@@ -26,10 +34,17 @@ export async function getAvailableModel(ai) {
   try {
     const response = await ai.models.list();
     let modelList = [];
+    
     if (Array.isArray(response)) {
       modelList = response;
     } else if (response && Array.isArray(response.models)) {
       modelList = response.models;
+    } else if (response && response.page && Array.isArray(response.page)) {
+      modelList = response.page;
+    } else if (response && Symbol.asyncIterator in Object(response)) {
+      for await (const m of response) {
+        modelList.push(m);
+      }
     }
 
     // Filter models supporting generateContent and excluding gemini-2 models if newer exist
@@ -40,12 +55,19 @@ export async function getAvailableModel(ai) {
       return supportsGen && name.toLowerCase().includes('gemini') && !name.toLowerCase().includes('gemini-2');
     });
 
+    // Fallback: If no non-gemini-2 model found, look for any gemini model supporting generateContent
+    const candidateModels = validModels.length > 0 ? validModels : modelList.filter(m => {
+      const name = m.name || '';
+      const methods = m.supportedGenerationMethods || [];
+      return (methods.length === 0 || methods.includes('generateContent')) && name.toLowerCase().includes('gemini');
+    });
+
     // Pick top Flash or Flash-like model from available SDK models
     const selected = 
-      validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
-      validModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
-      validModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
-      validModels[0] ||
+      candidateModels.find(m => (m.name || '').toLowerCase().includes('gemini-3.5-flash')) ||
+      candidateModels.find(m => (m.name || '').toLowerCase().includes('gemini-3-flash')) ||
+      candidateModels.find(m => (m.name || '').toLowerCase().includes('flash')) ||
+      candidateModels[0] ||
       modelList[0];
 
     if (selected && selected.name) {
@@ -55,7 +77,6 @@ export async function getAvailableModel(ai) {
     console.warn('ai.models.list() call warning:', err);
   }
 
-  // Default fallback dynamically fetched if list fails
   throw new Error('無法透過 SDK 取得 Gemini 模型列表，請檢查 API Key 或網路權限。');
 }
 
