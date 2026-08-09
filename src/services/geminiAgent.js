@@ -1,12 +1,13 @@
 import { GoogleGenAI } from '@google/genai';
 import { getStoredApiKey } from './reportStore';
 
-// Candidate models ordered by priority (handles API model deprecation/404s gracefully)
+// Candidate models ordered by priority starting with Gemini 3.5 Flash and newer models
 const CANDIDATE_MODELS = [
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
+  'gemini-3.5-flash',
+  'gemini-3-flash',
   'gemini-2.5-flash',
-  'gemini-2.0-flash-lite'
+  'gemini-2.0-flash',
+  'gemini-1.5-flash'
 ];
 
 // Helper: Call Gemini API with automatic model fallback
@@ -27,6 +28,25 @@ async function callGeminiGenerate(ai, prompt) {
     }
   }
   throw lastErr || new Error('所有 Gemini Flash 模型呼叫均失敗，請檢查 API Key 或網路狀況。');
+}
+
+// Format API errors into user-friendly Traditional Chinese messages per gemini-agent-dev-support
+function formatFriendlyError(error) {
+  const errStr = typeof error === 'string' ? error : (error?.message || JSON.stringify(error));
+  
+  if (errStr.includes('429') || errStr.includes('RESOURCE_EXHAUSTED') || errStr.includes('quota') || errStr.includes('limit: 0')) {
+    return `⚠️ **Gemini API 用量超過限制 (429 Rate Limit Exceeded)**\n\n您的 Gemini API Key 已達到 API 請求額度上限或暫時速率限制。\n\n**建議解法：**\n1. 請等待 10~30 秒後重新發送請求。\n2. 或點擊右上角 **『設定 API Key』** 更換為具備可用額度的 Gemini API Key (可至 [Google AI Studio](https://aistudio.google.com/app/apikey) 免費申請新 Key)。`;
+  }
+  
+  if (errStr.includes('404') || errStr.includes('NOT_FOUND')) {
+    return `⚠️ **Gemini API 模型連線失敗 (404 Not Found)**\n\n請求的模型不可用，系統已嘗試自動切換，請確認您的 API Key 權限。`;
+  }
+
+  if (errStr.includes('API_KEY_INVALID') || errStr.includes('400')) {
+    return `❌ **無效的 Gemini API Key (400 Invalid Key)**\n\n請確認點擊右上角『設定 API Key』輸入正確以 AIZA... 開頭的金鑰。`;
+  }
+
+  return `❌ **Gemini API 呼叫失敗：** ${errStr}`;
 }
 
 // Validate API Key using models.list() as required by gemini-agent-dev-support
@@ -99,7 +119,7 @@ Always respond in traditional Chinese (繁體中文).`;
     if (onTaskUpdate) onTaskUpdate([...tasks]);
 
     // Task 4: Generate HTML Report via Real Gemini API
-    if (onProgress) onProgress('🎨 呼叫 Gemini AI 產出 HTML5 互動採購報告...', 12);
+    if (onProgress) onProgress('🎨 呼叫 Gemini AI (gemini-3.5-flash / gemini-3-flash) 產出 HTML5 互動採購報告...', 12);
 
     const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
     
@@ -156,11 +176,9 @@ Ensure clean, modern Material Design styling with responsive CSS built directly 
     tasks.forEach(t => { if (t.status === 'running') t.status = 'pending'; });
     if (onTaskUpdate) onTaskUpdate([...tasks]);
 
-    const errMsg = error.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
-
     return {
       success: false,
-      text: `❌ **Gemini API 呼叫失敗：** ${errMsg}`,
+      text: formatFriendlyError(error),
       reportHtml: null
     };
   }
@@ -185,17 +203,19 @@ ${currentHtml}
 
 Return ONLY the updated complete HTML document string wrapped in \`\`\`html ... \`\`\`. Do not break existing scripts or layout.`;
 
-  const { response } = await callGeminiGenerate(ai, prompt);
-
-  const text = response.text || '';
-  const match = text.match(/```html([\s\S]*?)```/);
-  if (match && match[1]) {
-    return match[1].trim();
-  } else if (text.includes('<!DOCTYPE html>')) {
-    return text.trim();
+  try {
+    const { response } = await callGeminiGenerate(ai, prompt);
+    const text = response.text || '';
+    const match = text.match(/```html([\s\S]*?)```/);
+    if (match && match[1]) {
+      return match[1].trim();
+    } else if (text.includes('<!DOCTYPE html>')) {
+      return text.trim();
+    }
+    throw new Error('Gemini API 未能傳回有效的修改後 HTML。');
+  } catch (e) {
+    throw new Error(formatFriendlyError(e));
   }
-
-  throw new Error('Gemini API 未能傳回有效的修改後 HTML。');
 }
 
 // Helper utilities
