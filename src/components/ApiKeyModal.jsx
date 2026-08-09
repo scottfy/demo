@@ -1,104 +1,138 @@
 import React, { useState } from 'react';
-import { useNewsStore } from '../store/useNewsStore.js';
-import { Key, ExternalLink, Check, ShieldAlert, X } from 'lucide-react';
+import { Key, Check, AlertCircle, Loader2, X, Shield, ExternalLink } from 'lucide-react';
+import { getStoredApiKey, setStoredApiKey } from '../services/reportStore';
+import { validateApiKey } from '../services/geminiAgent';
 
-export default function ApiKeyModal() {
-  const { apiKey, saveApiKey, isApiKeyModalOpen, setIsApiKeyModalOpen } = useNewsStore();
-  const [inputKey, setInputKey] = useState(apiKey);
-  const [isSaved, setIsSaved] = useState(false);
+export default function ApiKeyModal({ isOpen, onClose }) {
+  const [keyInput, setKeyInput] = useState(getStoredApiKey());
+  const [isValidating, setIsValidating] = useState(false);
+  const [statusMessage, setStatusMessage] = useState(null);
 
-  if (!isApiKeyModalOpen) return null;
+  if (!isOpen) return null;
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
-    saveApiKey(inputKey.trim());
-    setIsSaved(true);
-    setTimeout(() => {
-      setIsSaved(false);
-      setIsApiKeyModalOpen(false);
-    }, 800);
+    if (!keyInput.trim()) {
+      setStoredApiKey('');
+      setStatusMessage({ type: 'info', text: '已改為模擬測試模式。' });
+      setTimeout(onClose, 800);
+      return;
+    }
+
+    setIsValidating(true);
+    setStatusMessage(null);
+
+    const valid = await validateApiKey(keyInput.trim());
+    setIsValidating(false);
+
+    if (valid) {
+      setStoredApiKey(keyInput.trim());
+      setStatusMessage({ type: 'success', text: '✅ Gemini API Key 驗證成功！已儲存。' });
+      setTimeout(onClose, 1000);
+    } else {
+      setStatusMessage({ type: 'error', text: '❌ API Key 驗證失敗，請檢查 Key 是否正確或具備存取權限。' });
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in">
-      <div className="relative w-full max-w-md glass-panel rounded-2xl p-6 border border-white/20 shadow-2xl">
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-5 relative animate-in zoom-in-95 duration-200">
         
         {/* Close Button */}
         <button
-          onClick={() => setIsApiKeyModalOpen(false)}
-          className="absolute top-4 right-4 text-slate-400 hover:text-white transition-colors"
+          onClick={onClose}
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg"
         >
           <X className="w-5 h-5" />
         </button>
 
-        {/* Modal Header */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-3 bg-cyan-500/20 text-cyan-400 rounded-xl border border-cyan-500/30">
-            <Key className="w-6 h-6" />
+        {/* Title */}
+        <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center font-bold">
+            <Key className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold text-white">設定 Google Gemini API Key</h2>
-            <p className="text-xs text-slate-400">連線您的 Gemini API Key 以啟用全功能 AI 新聞採編 Agent</p>
+            <h3 className="font-extrabold text-slate-900 text-lg">設定 Gemini API 金鑰</h3>
+            <p className="text-xs text-slate-500">啟用真實大語言模型進行多平台比價與 HTML5 報告繪製</p>
           </div>
         </div>
 
-        {/* Form */}
+        {/* Info Banner */}
+        <div className="bg-blue-50 border border-blue-100 rounded-xl p-3.5 text-xs text-blue-800 space-y-1">
+          <div className="font-bold flex items-center gap-1.5 text-blue-900">
+            <Shield className="w-4 h-4 text-blue-600" /> 金鑰安全聲明
+          </div>
+          <p className="text-blue-700 leading-relaxed">
+            API Key 僅於您的個人瀏覽器端以 `@google/genai` 進行驗證，絕不會傳送至本機以外的第三方伺服器。若未輸入，系統將使用預載強大比價引擎 (Mock Engine)。
+          </p>
+        </div>
+
+        {/* Input Form */}
         <form onSubmit={handleSave} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              API Key (Google AI Studio)
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">
+              Google Gemini API Key (AIZA... 開頭)
             </label>
             <input
               type="password"
-              value={inputKey}
-              onChange={(e) => setInputKey(e.target.value)}
-              placeholder="貼上 AIzaSy..."
-              className="w-full px-4 py-2.5 rounded-xl glass-input text-sm font-mono focus:ring-2 focus:ring-cyan-500/50"
-              required
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              placeholder="貼上 AIZA... 開頭的金鑰"
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             />
           </div>
 
-          {/* Guide Note */}
-          <div className="p-3 rounded-xl bg-cyan-500/5 border border-cyan-500/20 flex items-start gap-2.5 text-xs text-slate-300">
-            <ShieldAlert className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
-            <div>
-              您的 Key 會安全保存在您的個人瀏覽器 LocalStorage 中，絕不經過中間伺服器轉發。
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 ml-1 text-cyan-400 font-semibold hover:underline"
-              >
-                免費取得 API Key <ExternalLink className="w-3 h-3" />
-              </a>
+          {/* Status Alert Message */}
+          {statusMessage && (
+            <div className={`p-3 rounded-xl text-xs font-semibold ${
+              statusMessage.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
+              statusMessage.type === 'error' ? 'bg-red-50 text-red-800 border border-red-200' :
+              'bg-slate-100 text-slate-700'
+            }`}>
+              {statusMessage.text}
             </div>
-          </div>
+          )}
 
           {/* Action Buttons */}
-          <div className="flex items-center justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setIsApiKeyModalOpen(false)}
-              className="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white transition-colors"
+          <div className="flex items-center justify-between pt-2">
+            <a
+              href="https://aistudio.google.com/app/apikey"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs font-bold text-blue-600 hover:underline flex items-center gap-1"
             >
-              取消
-            </button>
-            <button
-              type="submit"
-              className="flex items-center gap-2 px-5 py-2.5 text-xs font-bold bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl shadow-lg shadow-cyan-500/25 hover:brightness-110 active:scale-95 transition-all"
-            >
-              {isSaved ? (
-                <>
-                  <Check className="w-4 h-4 text-emerald-300" />
-                  <span>已儲存設定！</span>
-                </>
-              ) : (
-                <span>儲存並連線</span>
-              )}
-            </button>
+              取得免費 Gemini Key <ExternalLink className="w-3 h-3" />
+            </a>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 text-xs font-semibold"
+              >
+                取消
+              </button>
+
+              <button
+                type="submit"
+                disabled={isValidating}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+              >
+                {isValidating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>驗證中...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>儲存與驗證</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
-
       </div>
     </div>
   );
