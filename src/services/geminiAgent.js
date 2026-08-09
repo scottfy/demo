@@ -1,6 +1,34 @@
 import { GoogleGenAI } from '@google/genai';
 import { getStoredApiKey } from './reportStore';
 
+// Candidate models ordered by priority (handles API model deprecation/404s gracefully)
+const CANDIDATE_MODELS = [
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash-lite'
+];
+
+// Helper: Call Gemini API with automatic model fallback
+async function callGeminiGenerate(ai, prompt) {
+  let lastErr = null;
+  for (const modelName of CANDIDATE_MODELS) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: prompt
+      });
+      if (response && response.text) {
+        return { response, modelName };
+      }
+    } catch (err) {
+      console.warn(`Model ${modelName} call returned error, trying fallback...`, err);
+      lastErr = err;
+    }
+  }
+  throw lastErr || new Error('所有 Gemini Flash 模型呼叫均失敗，請檢查 API Key 或網路狀況。');
+}
+
 // Validate API Key using models.list() as required by gemini-agent-dev-support
 export async function validateApiKey(apiKey) {
   if (!apiKey || apiKey.trim() === '') return false;
@@ -51,21 +79,21 @@ Always respond in traditional Chinese (繁體中文).`;
   try {
     // Task 1: Analyze specs
     if (onProgress) onProgress('⚙ 正在對齊採購規格...', 2);
-    await delay(1000);
+    await delay(800);
     tasks[0].status = 'completed';
     tasks[1].status = 'running';
     if (onTaskUpdate) onTaskUpdate([...tasks]);
 
     // Task 2: Multi-source Deep Search
     if (onProgress) onProgress('🔍 執行 Google 與多平台比價搜尋...', 5);
-    await delay(1200);
+    await delay(1000);
     tasks[1].status = 'completed';
     tasks[2].status = 'running';
     if (onTaskUpdate) onTaskUpdate([...tasks]);
 
     // Task 3: Evaluate Suppliers & Align Data
     if (onProgress) onProgress('📊 計算 20+ 候選廠商可信度與總成本 (TCO)...', 9);
-    await delay(1000);
+    await delay(800);
     tasks[2].status = 'completed';
     tasks[3].status = 'running';
     if (onTaskUpdate) onTaskUpdate([...tasks]);
@@ -74,7 +102,6 @@ Always respond in traditional Chinese (繁體中文).`;
     if (onProgress) onProgress('🎨 呼叫 Gemini AI 產出 HTML5 互動採購報告...', 12);
 
     const ai = new GoogleGenAI({ apiKey: apiKey.trim() });
-    const modelName = 'gemini-2.5-flash';
     
     const prompt = `${systemInstruction}
 User Request: ${userPrompt}
@@ -90,10 +117,7 @@ The HTML report MUST contain:
 
 Ensure clean, modern Material Design styling with responsive CSS built directly into the <style> tag.`;
 
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: prompt
-    });
+    const { response, modelName } = await callGeminiGenerate(ai, prompt);
 
     const text = response.text || '';
     let reportHtml = '';
@@ -113,7 +137,7 @@ Ensure clean, modern Material Design styling with responsive CSS built directly 
 
     const reportTitle = extractTitleFromHtml(reportHtml) || 'AI 採購比價評估報告';
 
-    const summaryResponse = `已透過 **Gemini AI** 為您成功產出 **${reportTitle}**！
+    const summaryResponse = `已透過 **Gemini AI (${modelName})** 為您成功產出 **${reportTitle}**！
 
 ### 🔍 調查成果摘要：
 1. **廣泛搜尋與資料對齊**：已彙整多平台候選比價方案。
@@ -132,9 +156,11 @@ Ensure clean, modern Material Design styling with responsive CSS built directly 
     tasks.forEach(t => { if (t.status === 'running') t.status = 'pending'; });
     if (onTaskUpdate) onTaskUpdate([...tasks]);
 
+    const errMsg = error.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+
     return {
       success: false,
-      text: `❌ **Gemini API 呼叫失敗：** ${error.message || '請檢查 API Key 是否有效或網路連線。'}`,
+      text: `❌ **Gemini API 呼叫失敗：** ${errMsg}`,
       reportHtml: null
     };
   }
@@ -159,10 +185,7 @@ ${currentHtml}
 
 Return ONLY the updated complete HTML document string wrapped in \`\`\`html ... \`\`\`. Do not break existing scripts or layout.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: prompt
-  });
+  const { response } = await callGeminiGenerate(ai, prompt);
 
   const text = response.text || '';
   const match = text.match(/```html([\s\S]*?)```/);
