@@ -104,7 +104,7 @@ async function callGenerateContentWithRetry(ai, primaryModel, contents, config, 
     'gemini-3.5-flash',
     'gemini-2.5-flash',
     'gemini-2.5-pro'
-  ].filter((m, i, arr) => m && arr.indexOf(m) === i); // deduplicate
+  ].filter((m, i, arr) => m && arr.indexOf(m) === i);
 
   let lastError = null;
 
@@ -131,11 +131,9 @@ async function callGenerateContentWithRetry(ai, primaryModel, contents, config, 
         const errStr = typeof err === 'string' ? err : (err?.message || JSON.stringify(err));
         console.warn(`Attempt ${attempt} for model ${currentModel} failed:`, errStr);
 
-        // If 503 / 429 transient error, wait 1.5s before retrying
         if (errStr.includes('503') || errStr.includes('UNAVAILABLE') || errStr.includes('high demand') || errStr.includes('429')) {
           await new Promise(r => setTimeout(r, 1500));
         } else {
-          // Non-transient error, try next candidate model
           break;
         }
       }
@@ -303,12 +301,18 @@ function extractReportHtml(text) {
 }
 
 /**
- * Wrap standalone HTML snippet into clean HTML5 document with Chart.js
+ * Wrap standalone HTML snippet into clean HTML5 document with Chart.js included
  */
 function wrapFullHtmlDoc(htmlSnippet, title) {
-  if (htmlSnippet.includes('<!DOCTYPE html>') || htmlSnippet.includes('<html')) {
-    return htmlSnippet;
+  let doc = htmlSnippet;
+  if (!doc.includes('cdn.jsdelivr.net/npm/chart.js')) {
+    doc = `<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>\n${doc}`;
   }
+
+  if (doc.includes('<!DOCTYPE html>') || doc.includes('<html')) {
+    return doc;
+  }
+
   return `<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -327,7 +331,7 @@ function wrapFullHtmlDoc(htmlSnippet, title) {
   </style>
 </head>
 <body>
-  ${htmlSnippet}
+  ${doc}
 </body>
 </html>`;
 }
@@ -387,12 +391,12 @@ Capabilities & Rules:
 2. You have google_search_query capability to search real-time public market information when needed.
 3. When answering data analysis or report requests, analyze data from both the database and user inputs thoroughly.
 4. IMPORTANT: You MUST generate a complete, standalone, production-ready HTML report code wrapped inside \`\`\`html ... \`\`\` at the end of your response.
-5. The HTML report MUST:
-   - Use dynamic Chart.js visualizations (include <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> inside HTML head/script).
-   - Follow world-class RWD UI/UX standards, paper card layouts, clear color highlights, and Material Design aesthetic.
-   - Include dynamic script controls (e.g. range sliders for budget/quantity adjustments, filter buttons, expandable details).
-   - Provide concrete evidence links when quoting external sources.
-   - Be completely self-contained in standard HTML5 syntax.
+5. CHART.JS & DATA RENDERING RULES (CRITICAL):
+   - You MUST include <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> inside HTML head or body.
+   - You MUST hardcode actual numeric data arrays extracted from database queries directly into JavaScript variables (e.g. const labels = ['QUICK-Stop', 'Ernst Handel', 'SAVE-A-LOT']; const data = [117483, 113236, 104361];). NEVER leave chart data arrays empty [] or all zeros!
+   - Chart initialization MUST be wrapped inside document.addEventListener('DOMContentLoaded', function() { ... }) or executed safely after canvas element so charts draw bars/lines immediately on page load!
+   - Filter/slider script controls MUST initialize with non-empty default values and update chart labels and data correctly without clearing initial charts.
+6. Design: Follow world-class RWD UI/UX standards, paper card layouts, clear color highlights, and Material Design aesthetic.
 
 Always respond in Traditional Chinese (繁體中文).`;
 
@@ -435,7 +439,7 @@ Always respond in Traditional Chinese (繁體中文).`;
         onActivityState
       );
 
-      modelName = usedModel; // Update if model candidate switched
+      modelName = usedModel;
 
       const candidate = response.candidates?.[0];
       if (!candidate) {
@@ -524,7 +528,7 @@ Always respond in Traditional Chinese (繁體中文).`;
     // Ensure a rich, informative Chinese summary message if summary is short or empty
     if (!chatSummaryText || chatSummaryText.length < 15) {
       if (reportHtml) {
-        chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含圖表視覺化與動態數值調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
+        chatSummaryText = `已成功為您完成數據分析與交叉比對！\n\n📊 **互動式 HTML5 報告已產出**\n已為您繪製 **${reportTitle}** 並載入於右側沙盒區。報告內含 Chart.js 數據視覺化與動態調整元件，您可一鍵開啟「全螢幕簡報」或進行「局部 AI 框選微調」。`;
       } else {
         chatSummaryText = `已為您完成數據查詢與比對！分析結果如下：\n\n${finalMarkdownText || '（無額外說明）'}`;
       }
@@ -572,6 +576,7 @@ ${currentHtml}
 \`\`\`
 
 Return ONLY the updated complete standalone HTML document string wrapped in \`\`\`html ... \`\`\`.
+CRITICAL CHART RULE: Ensure Chart.js datasets have concrete non-empty numeric data arrays and DOMContentLoaded wrapper so charts render correctly on load.
 Maintain standard modern CSS styling, Chart.js code, dynamic interactive scripts, and paper-shadow card layouts.`;
 
   try {
